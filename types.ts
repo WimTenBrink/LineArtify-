@@ -1,3 +1,4 @@
+
 export enum ProcessingStatus {
   PENDING = 'PENDING',
   PROCESSING = 'PROCESSING',
@@ -5,12 +6,17 @@ export enum ProcessingStatus {
   ERROR = 'ERROR'
 }
 
+export interface GeneratedImage {
+  type: 'full' | 'model' | 'background';
+  url: string;
+}
+
 export interface QueueItem {
   id: string;
   file: File;
   thumbnailUrl: string;
   status: ProcessingStatus;
-  resultUrl?: string;
+  results?: GeneratedImage[];
   errorMessage?: string;
   timestamp: number;
 }
