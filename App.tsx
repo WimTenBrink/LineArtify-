@@ -391,14 +391,14 @@ export default function App() {
                 <p className="text-sm">Start processing to generate line art.</p>
               </div>
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+              <div className="columns-1 md:columns-2 lg:columns-3 xl:columns-4 gap-6 space-y-6">
                 {successQueue.flatMap(item => (
                   (item.results || []).map((result, idx) => (
-                    <div key={`${item.id}-${result.type}`} className="group relative aspect-square bg-white rounded-xl overflow-hidden shadow-lg hover:shadow-2xl transition-all hover:scale-[1.02] border-4 border-white">
+                    <div key={`${item.id}-${result.type}`} className="group relative break-inside-avoid bg-white rounded-xl overflow-hidden shadow-lg hover:shadow-2xl transition-all hover:scale-[1.02] border-4 border-white mb-6">
                       <img 
                         src={result.url} 
                         alt="Result" 
-                        className="w-full h-full object-contain p-4" 
+                        className="w-full h-auto object-contain p-2" 
                       />
                       
                       {/* Type Badge */}

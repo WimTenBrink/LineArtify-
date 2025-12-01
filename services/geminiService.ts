@@ -18,11 +18,13 @@ export const fileToGenerativePart = async (file: File): Promise<string> => {
 };
 
 // Helper to crop image to content (non-white pixels) with padding
+// Optimized to be non-blocking for large images by processing in chunks
 const cropToContent = async (base64Data: string, padding: number = 10): Promise<string> => {
   if (typeof window === 'undefined') return base64Data; // Safety check for SSR
 
   return new Promise((resolve) => {
     const img = new Image();
+    
     img.onload = () => {
       const canvas = document.createElement('canvas');
       canvas.width = img.width;
@@ -33,61 +35,85 @@ const cropToContent = async (base64Data: string, padding: number = 10): Promise<
       ctx.drawImage(img, 0, 0);
       const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
       const data = imageData.data;
+      const width = canvas.width;
+      const height = canvas.height;
       
-      let minX = canvas.width, minY = canvas.height, maxX = 0, maxY = 0;
+      let minX = width, minY = height, maxX = 0, maxY = 0;
       let found = false;
 
-      // Scan for non-white pixels. Assuming white background.
-      // We check if pixel is significantly darker than pure white.
-      for (let y = 0; y < canvas.height; y++) {
-        for (let x = 0; x < canvas.width; x++) {
-          const i = (y * canvas.width + x) * 4;
-          const r = data[i];
-          const g = data[i + 1];
-          const b = data[i + 2];
-          // const a = data[i + 3];
+      // Process in chunks to avoid blocking the UI thread
+      const CHUNK_SIZE = 100; // Process 100 rows at a time
+      let currentY = 0;
 
-          // If pixel is not white (allow some noise tolerance)
-          if (r < 250 || g < 250 || b < 250) {
-            if (x < minX) minX = x;
-            if (x > maxX) maxX = x;
-            if (y < minY) minY = y;
-            if (y > maxY) maxY = y;
-            found = true;
+      const processChunk = () => {
+        const endY = Math.min(currentY + CHUNK_SIZE, height);
+        
+        for (let y = currentY; y < endY; y++) {
+          for (let x = 0; x < width; x++) {
+            const i = (y * width + x) * 4;
+            const r = data[i];
+            const g = data[i + 1];
+            const b = data[i + 2];
+            // const a = data[i + 3];
+
+            // If pixel is not white (allow some noise tolerance)
+            if (r < 250 || g < 250 || b < 250) {
+              if (x < minX) minX = x;
+              if (x > maxX) maxX = x;
+              if (y < minY) minY = y;
+              if (y > maxY) maxY = y;
+              found = true;
+            }
           }
         }
-      }
 
-      if (!found) {
-        resolve(base64Data); // Return original if empty or pure white
-        return;
-      }
+        currentY = endY;
 
-      const contentWidth = maxX - minX + 1;
-      const contentHeight = maxY - minY + 1;
-      
-      const croppedCanvas = document.createElement('canvas');
-      croppedCanvas.width = contentWidth + (padding * 2);
-      croppedCanvas.height = contentHeight + (padding * 2);
-      const croppedCtx = croppedCanvas.getContext('2d');
-      
-      if (!croppedCtx) { resolve(base64Data); return; }
+        if (currentY < height) {
+          // Schedule next chunk
+          setTimeout(processChunk, 0);
+        } else {
+          // Finished processing all rows
+          finalizeCrop();
+        }
+      };
 
-      // Fill white first
-      croppedCtx.fillStyle = '#FFFFFF';
-      croppedCtx.fillRect(0, 0, croppedCanvas.width, croppedCanvas.height);
+      const finalizeCrop = () => {
+        if (!found) {
+          resolve(base64Data); // Return original if empty or pure white
+          return;
+        }
 
-      // Draw content
-      croppedCtx.drawImage(
-        canvas, 
-        minX, minY, contentWidth, contentHeight, 
-        padding, padding, contentWidth, contentHeight
-      );
+        const contentWidth = maxX - minX + 1;
+        const contentHeight = maxY - minY + 1;
+        
+        const croppedCanvas = document.createElement('canvas');
+        croppedCanvas.width = contentWidth + (padding * 2);
+        croppedCanvas.height = contentHeight + (padding * 2);
+        const croppedCtx = croppedCanvas.getContext('2d');
+        
+        if (!croppedCtx) { resolve(base64Data); return; }
 
-      resolve(croppedCanvas.toDataURL('image/png'));
+        // Fill white first
+        croppedCtx.fillStyle = '#FFFFFF';
+        croppedCtx.fillRect(0, 0, croppedCanvas.width, croppedCanvas.height);
+
+        // Draw content
+        croppedCtx.drawImage(
+          canvas, 
+          minX, minY, contentWidth, contentHeight, 
+          padding, padding, contentWidth, contentHeight
+        );
+
+        resolve(croppedCanvas.toDataURL('image/png'));
+      };
+
+      // Start processing
+      processChunk();
     };
+
     img.onerror = () => resolve(base64Data); // Fallback
-    img.src = base64Data; // data URI passed in directly or constructed outside
+    img.src = base64Data; 
   });
 };
 
@@ -137,6 +163,9 @@ export const generateLineArtVariations = async (
   onStatusUpdate?: (message: string) => void
 ): Promise<GeneratedImage[]> => {
   
+  // Yield to UI to allow initial status render
+  await new Promise(resolve => setTimeout(resolve, 0));
+
   const ai = new GoogleGenAI({ apiKey });
   
   onStatusUpdate?.("Encoding image data...");
