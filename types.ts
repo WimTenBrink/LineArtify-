@@ -7,7 +7,7 @@ export enum ProcessingStatus {
 }
 
 export interface GeneratedImage {
-  type: 'full' | 'model' | 'background';
+  type: 'full' | 'model' | 'background' | 'report';
   url: string;
 }
 
@@ -19,6 +19,8 @@ export interface QueueItem {
   results?: GeneratedImage[];
   errorMessage?: string;
   timestamp: number;
+  retryCount: number;
+  errorHistory: string[];
 }
 
 export enum LogLevel {

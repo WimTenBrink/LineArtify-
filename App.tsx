@@ -1,13 +1,15 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useLogger } from './services/loggerService';
-import { generateLineArtVariations } from './services/geminiService';
+import { generateLineArtVariations, generateAnalysisReport } from './services/geminiService';
 import Console from './components/Console';
 import ImageViewer from './components/ImageViewer';
 import { QueueItem, ProcessingStatus, LogLevel, LogEntry } from './types';
-import { Upload, X, RefreshCw, AlertCircle, CheckCircle2, Image as ImageIcon, Terminal, Maximize, Play, Pause, Layers, User, Image, Trash2, Eraser, Key, ChevronDown, AlertTriangle, Brain } from 'lucide-react';
+import { Upload, X, RefreshCw, AlertCircle, CheckCircle2, Image as ImageIcon, Terminal, Maximize, Play, Pause, Layers, User, Image, Trash2, Eraser, Key, ChevronDown, AlertTriangle, Brain, FileText } from 'lucide-react';
 
 const MAX_CONCURRENT_REQUESTS = 1;
+const AUTO_RETRY_LIMIT = 3;
+const MAX_TOTAL_RETRIES = 10;
 
 export default function App() {
   const [queue, setQueue] = useState<QueueItem[]>([]);
@@ -78,7 +80,9 @@ export default function App() {
         file,
         thumbnailUrl: URL.createObjectURL(file),
         status: ProcessingStatus.PENDING,
-        timestamp: Date.now()
+        timestamp: Date.now(),
+        retryCount: 0,
+        errorHistory: []
       }));
 
     if (newItems.length > 0) {
@@ -123,11 +127,12 @@ export default function App() {
     setQueue(prev => {
       const item = prev.find(i => i.id === id);
       if (!item) return prev;
-      // Move to end of queue by creating new object with PENDING status
+      // Status to PENDING. retryCount and errorHistory are preserved.
+      // Retry count will increment upon next failure.
       const others = prev.filter(i => i.id !== id);
       return [...others, { ...item, status: ProcessingStatus.PENDING, errorMessage: undefined }];
     });
-    addLog(LogLevel.INFO, `Retrying item ${id}`);
+    addLog(LogLevel.INFO, `Manually retrying item ${id}`);
   };
 
   const handleRetryAll = () => {
@@ -160,17 +165,16 @@ export default function App() {
     addLog(LogLevel.INFO, "Cleared gallery (removed all success items).");
   };
 
-  const triggerDownload = (url: string, originalFilename: string, prefix: string) => {
+  const triggerDownload = (url: string, originalFilename: string, prefix: string, extension: string = 'png') => {
     try {
       const a = document.createElement('a');
       a.href = url;
       const nameWithoutExt = originalFilename.substring(0, originalFilename.lastIndexOf('.')) || originalFilename;
-      a.download = `${prefix}${nameWithoutExt}.png`;
+      a.download = `${prefix}${nameWithoutExt}.${extension}`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
     } catch (e) {
-      // Use WARN for download issues to avoid system error flags
       console.warn("Auto-download failed", e);
     }
   };
@@ -189,7 +193,7 @@ export default function App() {
       // Start processing
       setProcessingCount(prev => prev + 1);
       setQueue(prev => prev.map(i => i.id === nextItem.id ? { ...i, status: ProcessingStatus.PROCESSING } : i));
-      setProcessingStatus(`Initializing ${nextItem.file.name}...`);
+      setProcessingStatus(`Initializing ${nextItem.file.name} (Attempt ${nextItem.retryCount + 1})...`);
       
       const apiKey = process.env.API_KEY || '';
       if (!apiKey) {
@@ -201,15 +205,27 @@ export default function App() {
       }
 
       try {
-        addLog(LogLevel.INFO, `Starting processing for ${nextItem.file.name}`);
-        
-        // Generate variations
-        const results = await generateLineArtVariations(
-          nextItem.file, 
-          apiKey, 
-          addLog,
-          (msg) => setProcessingStatus(msg)
-        );
+        let results;
+
+        if (nextItem.retryCount >= MAX_TOTAL_RETRIES) {
+             addLog(LogLevel.INFO, `Retry limit reached (${nextItem.retryCount}). Switching to Cloud Vision Analysis for ${nextItem.file.name}`);
+             setProcessingStatus(`Generating Cloud Vision Report for ${nextItem.file.name}...`);
+             results = await generateAnalysisReport(
+                nextItem.file, 
+                apiKey, 
+                nextItem.errorHistory,
+                addLog,
+                (msg) => setProcessingStatus(msg)
+             );
+        } else {
+             addLog(LogLevel.INFO, `Starting line art processing for ${nextItem.file.name}`);
+             results = await generateLineArtVariations(
+              nextItem.file, 
+              apiKey, 
+              addLog,
+              (msg) => setProcessingStatus(msg)
+            );
+        }
         
         setQueue(prev => prev.map(i => i.id === nextItem.id ? { 
           ...i, 
@@ -219,28 +235,46 @@ export default function App() {
         
         addLog(LogLevel.INFO, `Successfully processed ${nextItem.file.name}`);
         
-        // Auto Download Each Variation
+        // Auto Download
         results.forEach(res => {
-            let prefix = 'Line-';
-            if (res.type === 'model') prefix = 'Line-Model-';
-            if (res.type === 'background') prefix = 'Line-Background-';
-            
-            triggerDownload(res.url, nextItem.file.name, prefix);
+            if (res.type === 'report') {
+                triggerDownload(res.url, nextItem.file.name, '', 'md');
+            } else {
+                let prefix = 'Line-';
+                if (res.type === 'model') prefix = 'Line-Model-';
+                if (res.type === 'background') prefix = 'Line-Background-';
+                triggerDownload(res.url, nextItem.file.name, prefix, 'png');
+            }
         });
         addLog(LogLevel.INFO, `Triggered auto-downloads for ${nextItem.file.name}`);
 
       } catch (err: any) {
         const errorMsg = err.message || 'Unknown error';
+        const nextRetryCount = nextItem.retryCount + 1;
+        const newHistory = [...nextItem.errorHistory, errorMsg];
+
+        // Determine if we should auto-retry
+        // We retry automatically for first 3 attempts (count 0, 1, 2)
+        // If nextRetryCount < AUTO_RETRY_LIMIT (3), we go back to PENDING immediately.
+        
+        let nextStatus = ProcessingStatus.ERROR;
+        
+        if (nextRetryCount < AUTO_RETRY_LIMIT) {
+            nextStatus = ProcessingStatus.PENDING;
+            addLog(LogLevel.INFO, `Auto-retrying ${nextItem.file.name} (Attempt ${nextRetryCount + 1})`);
+        } else {
+            addLog(LogLevel.WARN, `Failed ${nextItem.file.name} after ${nextRetryCount} attempts. Waiting for manual retry.`);
+        }
         
         setQueue(prev => prev.map(i => i.id === nextItem.id ? { 
           ...i, 
-          status: ProcessingStatus.ERROR, 
-          errorMessage: errorMsg
+          status: nextStatus, 
+          errorMessage: errorMsg,
+          retryCount: nextRetryCount,
+          errorHistory: newHistory
         } : i));
         
-        // Log as WARN if it's a safety block to prevent AI Studio "fix these errors" spam
-        // Log as ERROR for unexpected crashes
-        if (errorMsg.includes("blocked by safety") || errorMsg.includes("No content parts")) {
+        if (errorMsg.includes("blocked by safety")) {
           addLog(LogLevel.WARN, `Processing blocked for ${nextItem.file.name}: ${errorMsg}`);
         } else {
           addLog(LogLevel.ERROR, `Failed to process ${nextItem.file.name}`, err);
@@ -427,11 +461,16 @@ export default function App() {
                   <div className="flex items-center mt-1">
                     {item.status === ProcessingStatus.PROCESSING ? (
                       <span className="text-xs text-amber-400 flex items-center animate-pulse">
-                        <RefreshCw className="w-3 h-3 mr-1 animate-spin" /> Processing...
+                        <RefreshCw className="w-3 h-3 mr-1 animate-spin" /> 
+                         {item.retryCount >= MAX_TOTAL_RETRIES 
+                            ? "Analyzing..." 
+                            : item.retryCount > 0 
+                                ? `Retry ${item.retryCount}...` 
+                                : "Processing..."}
                       </span>
                     ) : (
                       <span className="text-xs text-slate-500 flex items-center">
-                        Waiting...
+                         {item.retryCount > 0 ? `Queued (Retry ${item.retryCount})` : "Waiting..."}
                       </span>
                     )}
                   </div>
@@ -485,27 +524,50 @@ export default function App() {
                 {successQueue.flatMap(item => (
                   (item.results || []).map((result, idx) => (
                     <div key={`${item.id}-${result.type}`} className="group relative break-inside-avoid bg-white rounded-xl overflow-hidden shadow-lg hover:shadow-2xl transition-all hover:scale-[1.02] border-4 border-white mb-6">
-                      <img 
-                        src={result.url} 
-                        alt="Result" 
-                        className="w-full h-auto object-contain p-2" 
-                      />
+                      
+                      {result.type === 'report' ? (
+                          // Report Card
+                          <div className="w-full h-64 bg-slate-800 flex flex-col items-center justify-center p-4 text-center">
+                             <FileText size={48} className="text-indigo-400 mb-2" />
+                             <h3 className="text-white font-bold mb-1">Analysis Report</h3>
+                             <p className="text-slate-400 text-xs">Line Art failed {MAX_TOTAL_RETRIES}x</p>
+                             <p className="text-slate-500 text-[10px] mt-2">Cloud Vision Analysis Generated</p>
+                          </div>
+                      ) : (
+                          // Image Card
+                          <img 
+                            src={result.url} 
+                            alt="Result" 
+                            className="w-full h-auto object-contain p-2" 
+                          />
+                      )}
                       
                       {/* Type Badge */}
                       <div className="absolute top-2 left-2 px-2 py-1 rounded bg-black/60 text-white text-[10px] uppercase font-bold tracking-wider backdrop-blur-sm flex items-center">
                         {result.type === 'full' && <Layers size={10} className="mr-1"/>}
                         {result.type === 'model' && <User size={10} className="mr-1"/>}
                         {result.type === 'background' && <Image size={10} className="mr-1"/>}
+                        {result.type === 'report' && <FileText size={10} className="mr-1"/>}
                         {result.type}
                       </div>
 
                       <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center space-y-3">
-                        <button 
-                          onClick={() => setViewerUrl(result.url)}
-                          className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-full font-medium text-sm flex items-center transform translate-y-4 group-hover:translate-y-0 transition-transform"
-                        >
-                          <Maximize size={16} className="mr-2" /> Inspect
-                        </button>
+                        {result.type !== 'report' && (
+                             <button 
+                               onClick={() => setViewerUrl(result.url)}
+                               className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-full font-medium text-sm flex items-center transform translate-y-4 group-hover:translate-y-0 transition-transform"
+                             >
+                               <Maximize size={16} className="mr-2" /> Inspect
+                             </button>
+                        )}
+                        {result.type === 'report' && (
+                             <button 
+                               onClick={() => triggerDownload(result.url, item.file.name, '', 'md')}
+                               className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-full font-medium text-sm flex items-center transform translate-y-4 group-hover:translate-y-0 transition-transform"
+                             >
+                               <FileText size={16} className="mr-2" /> Download Report
+                             </button>
+                        )}
                       </div>
                       
                       {/* Source Filename Label */}
@@ -565,6 +627,9 @@ export default function App() {
                   <div className="ml-3 min-w-0 flex-1">
                      <p className="text-sm font-medium text-slate-200 truncate">{item.file.name}</p>
                      <p className="text-xs text-red-300 mt-1 line-clamp-2">{item.errorMessage}</p>
+                     <div className="mt-1 flex items-center text-[10px] text-slate-400">
+                        <span className="font-mono bg-white/5 px-1 rounded">Retry #{item.retryCount}</span>
+                     </div>
                   </div>
                  </div>
                  <div className="flex space-x-2 mt-2">
@@ -572,7 +637,8 @@ export default function App() {
                     onClick={() => handleRetry(item.id)}
                     className="flex-1 py-1.5 px-3 bg-white/5 hover:bg-white/10 rounded text-xs font-medium text-slate-200 transition-colors flex items-center justify-center"
                    >
-                     <RefreshCw size={12} className="mr-1.5" /> Retry
+                     <RefreshCw size={12} className="mr-1.5" /> 
+                     {item.retryCount >= MAX_TOTAL_RETRIES ? "Run Analysis" : "Retry"}
                    </button>
                    <button 
                     onClick={() => handleDelete(item.id)}
