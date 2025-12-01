@@ -4,8 +4,8 @@ import { useLogger } from './services/loggerService';
 import { generateLineArtVariations } from './services/geminiService';
 import Console from './components/Console';
 import ImageViewer from './components/ImageViewer';
-import { QueueItem, ProcessingStatus, LogLevel } from './types';
-import { Upload, X, RefreshCw, AlertCircle, CheckCircle2, Image as ImageIcon, Terminal, Maximize, Play, Pause, Layers, User, Sparkles, Brain, Trash2, Eraser, Image } from 'lucide-react';
+import { QueueItem, ProcessingStatus, LogLevel, LogEntry } from './types';
+import { Upload, X, RefreshCw, AlertCircle, CheckCircle2, Image as ImageIcon, Terminal, Maximize, Play, Pause, Layers, User, Image, Trash2, Eraser, Key, ChevronDown, AlertTriangle, Brain } from 'lucide-react';
 
 const MAX_CONCURRENT_REQUESTS = 1;
 
@@ -16,7 +16,8 @@ export default function App() {
   const [processingStatus, setProcessingStatus] = useState<string>("");
   const [viewerUrl, setViewerUrl] = useState<string | null>(null);
   const [isConsoleOpen, setIsConsoleOpen] = useState(false);
-  const { addLog } = useLogger();
+  const [isErrorDropdownOpen, setIsErrorDropdownOpen] = useState(false);
+  const { addLog, logs } = useLogger();
 
   // Drag and drop state
   const [isDraggingOver, setIsDraggingOver] = useState(false);
@@ -27,7 +28,45 @@ export default function App() {
   const successQueue = queue.filter(item => item.status === ProcessingStatus.SUCCESS);
   const errorQueue = queue.filter(item => item.status === ProcessingStatus.ERROR);
 
+  // Error History Logic
+  const errorLogs = logs.filter(l => l.level === LogLevel.ERROR);
+  // Get distinct error messages (combining title and details for uniqueness)
+  const uniqueErrors = errorLogs.reduce((acc: LogEntry[], current) => {
+    const msg = `${current.title} ${JSON.stringify(current.details || '')}`;
+    if (!acc.find(item => `${item.title} ${JSON.stringify(item.details || '')}` === msg)) {
+      acc.push(current);
+    }
+    return acc;
+  }, []).slice(0, 5);
+  
+  const lastError = errorLogs.length > 0 ? errorLogs[0] : null;
+
+  const getErrorMessage = (log: LogEntry) => {
+    let detailMsg = '';
+    if (log.details) {
+       if (typeof log.details === 'string') detailMsg = log.details;
+       else if (log.details.message) detailMsg = log.details.message;
+       else detailMsg = JSON.stringify(log.details);
+    }
+    return `${log.title}${detailMsg ? `: ${detailMsg}` : ''}`;
+  };
+
+
   // --- Handlers ---
+
+  const handleApiKeyChange = async () => {
+    try {
+      if ((window as any).aistudio && (window as any).aistudio.openSelectKey) {
+        await (window as any).aistudio.openSelectKey();
+        // Force re-read of env in next process cycle implicitly
+        addLog(LogLevel.INFO, "API Key update requested by user.");
+      } else {
+        alert("API Key selection is not available in this environment.");
+      }
+    } catch (e) {
+      console.error("Failed to open API key selector", e);
+    }
+  };
 
   const handleFiles = useCallback((files: FileList | null) => {
     if (!files) return;
@@ -225,6 +264,7 @@ export default function App() {
       onDragLeave={handleDragLeave}
       onDragOver={handleDragOver}
       onDrop={handleDrop}
+      onClick={() => isErrorDropdownOpen && setIsErrorDropdownOpen(false)}
     >
       
       {/* Background Decor */}
@@ -261,11 +301,61 @@ export default function App() {
           )}
         </div>
 
-        <div className="flex items-center space-x-4">
+        <div className="flex items-center space-x-3">
+            {/* Error Display Widget */}
+            {lastError && (
+              <div className="relative">
+                <button
+                  onClick={(e) => { e.stopPropagation(); setIsErrorDropdownOpen(!isErrorDropdownOpen); }}
+                  className="flex items-center space-x-2 px-3 py-1.5 rounded-md bg-red-900/20 border border-red-500/30 text-red-300 hover:bg-red-900/40 transition-colors text-xs font-mono max-w-[200px]"
+                >
+                  <AlertTriangle size={14} className="shrink-0" />
+                  <span className="truncate">{getErrorMessage(lastError)}</span>
+                  <ChevronDown size={12} className="shrink-0 opacity-50" />
+                </button>
+
+                {isErrorDropdownOpen && (
+                  <div className="absolute top-full right-0 mt-2 w-96 bg-[#1e1e2e] border border-slate-700 rounded-lg shadow-2xl z-50 overflow-hidden flex flex-col">
+                    <div className="bg-red-900/20 p-2 border-b border-white/5 text-xs font-bold text-red-300 flex items-center">
+                      <AlertCircle size={12} className="mr-2" /> Recent Errors
+                    </div>
+                    <div className="max-h-60 overflow-y-auto">
+                      {uniqueErrors.map((err, idx) => (
+                        <div key={err.id} className="p-3 border-b border-white/5 hover:bg-white/5 text-xs font-mono text-slate-300 break-words">
+                          <div className="opacity-50 text-[10px] mb-1">{err.timestamp.toLocaleTimeString()}</div>
+                          {getErrorMessage(err)}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+            
+            <div className="h-6 w-px bg-white/10 mx-2"></div>
+
+             {/* API Key Button */}
+            <button
+              onClick={handleApiKeyChange}
+              className="p-2 text-slate-400 hover:text-white hover:bg-white/10 rounded-lg transition-colors"
+              title="Set API Key"
+            >
+              <Key size={20} />
+            </button>
+
+            {/* Console Button */}
+            <button
+              onClick={() => setIsConsoleOpen(true)}
+              className="p-2 text-slate-400 hover:text-white hover:bg-white/10 rounded-lg transition-colors"
+              title="Open Console"
+            >
+              <Terminal size={20} />
+            </button>
+
              {/* Start/Stop Button */}
             <button
               onClick={() => setIsProcessingEnabled(!isProcessingEnabled)}
-              className={`flex items-center space-x-2 px-4 py-2 rounded-full font-medium transition-all shadow-lg ${
+              className={`flex items-center space-x-2 px-4 py-1.5 rounded-full font-medium transition-all shadow-lg ml-2 text-sm ${
                 isProcessingEnabled 
                   ? 'bg-red-500/10 text-red-400 hover:bg-red-500/20 border border-red-500/30' 
                   : 'bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 border border-emerald-500/30'
@@ -273,13 +363,13 @@ export default function App() {
             >
               {isProcessingEnabled ? (
                 <>
-                  <Pause size={18} className="fill-current" />
-                  <span>Stop Processing</span>
+                  <Pause size={16} className="fill-current" />
+                  <span>Stop</span>
                 </>
               ) : (
                 <>
-                  <Play size={18} className="fill-current" />
-                  <span>Start Processing</span>
+                  <Play size={16} className="fill-current" />
+                  <span>Start</span>
                 </>
               )}
             </button>
@@ -496,20 +586,6 @@ export default function App() {
           </div>
         </div>
 
-      </div>
-
-      {/* Floating Console Button */}
-      <div className="fixed bottom-6 right-6 z-40">
-        <button 
-          onClick={() => setIsConsoleOpen(true)}
-          className="bg-indigo-600 hover:bg-indigo-500 text-white p-4 rounded-full shadow-lg shadow-indigo-500/30 transition-all hover:scale-110 active:scale-95 group"
-          title="Open Developer Console"
-        >
-          <Terminal size={24} />
-          <span className="absolute right-full mr-3 top-1/2 -translate-y-1/2 bg-slate-800 text-white text-xs px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none">
-            Dev Console
-          </span>
-        </button>
       </div>
 
       {/* Modals */}
