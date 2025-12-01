@@ -4,8 +4,8 @@ import { useLogger } from './services/loggerService';
 import { generateLineArtVariations, generateAnalysisReport } from './services/geminiService';
 import Console from './components/Console';
 import ImageViewer from './components/ImageViewer';
-import { QueueItem, ProcessingStatus, LogLevel, LogEntry } from './types';
-import { Upload, X, RefreshCw, AlertCircle, CheckCircle2, Image as ImageIcon, Terminal, Maximize, Play, Pause, Layers, User, Image, Trash2, Eraser, Key, ChevronDown, AlertTriangle, Brain, FileText } from 'lucide-react';
+import { QueueItem, ProcessingStatus, LogLevel, LogEntry, GeneratedImage } from './types';
+import { Upload, X, RefreshCw, AlertCircle, CheckCircle2, Image as ImageIcon, Terminal, Maximize, Play, Pause, Layers, User, Image, Trash2, Eraser, Key, ChevronDown, AlertTriangle, Brain, FileText, Users, Expand } from 'lucide-react';
 
 const MAX_CONCURRENT_REQUESTS = 1;
 const AUTO_RETRY_LIMIT = 3;
@@ -19,6 +19,7 @@ export default function App() {
   const [viewerUrl, setViewerUrl] = useState<string | null>(null);
   const [isConsoleOpen, setIsConsoleOpen] = useState(false);
   const [isErrorDropdownOpen, setIsErrorDropdownOpen] = useState(false);
+  const [gender, setGender] = useState<string>('As-is'); // Gender state
   const { addLog, logs } = useLogger();
 
   // Drag and drop state
@@ -127,8 +128,6 @@ export default function App() {
     setQueue(prev => {
       const item = prev.find(i => i.id === id);
       if (!item) return prev;
-      // Status to PENDING. retryCount and errorHistory are preserved.
-      // Retry count will increment upon next failure.
       const others = prev.filter(i => i.id !== id);
       return [...others, { ...item, status: ProcessingStatus.PENDING, errorMessage: undefined }];
     });
@@ -136,7 +135,6 @@ export default function App() {
   };
 
   const handleRetryAll = () => {
-    // When retrying all, we want to reset them to pending.
     setQueue(prev => prev.map(item => 
       item.status === ProcessingStatus.ERROR 
         ? { ...item, status: ProcessingStatus.PENDING, errorMessage: undefined }
@@ -204,66 +202,83 @@ export default function App() {
         return;
       }
 
-      try {
-        let results;
+      // Store results here so we can access them in catch/finally blocks if needed
+      let currentResults: GeneratedImage[] = nextItem.results || [];
+      let executionErrors: string[] = [];
 
+      try {
         if (nextItem.retryCount >= MAX_TOTAL_RETRIES) {
              addLog(LogLevel.INFO, `Retry limit reached (${nextItem.retryCount}). Switching to Cloud Vision Analysis for ${nextItem.file.name}`);
              setProcessingStatus(`Generating Cloud Vision Report for ${nextItem.file.name}...`);
-             results = await generateAnalysisReport(
+             const reportResults = await generateAnalysisReport(
                 nextItem.file, 
                 apiKey, 
                 nextItem.errorHistory,
                 addLog,
                 (msg) => setProcessingStatus(msg)
              );
+             currentResults = reportResults; // Report replaces other results in this case
         } else {
-             addLog(LogLevel.INFO, `Starting line art processing for ${nextItem.file.name}`);
-             results = await generateLineArtVariations(
+             addLog(LogLevel.INFO, `Starting line art processing for ${nextItem.file.name} with gender: ${gender}`);
+             // Pass existing results to allow partial retries
+             const outcome = await generateLineArtVariations(
               nextItem.file, 
-              apiKey, 
+              apiKey,
+              gender,
+              currentResults,
               addLog,
               (msg) => setProcessingStatus(msg)
             );
+            
+            // Merge results (though the service returns the full list anyway)
+            currentResults = outcome.results;
+            executionErrors = outcome.errors;
         }
         
+        if (executionErrors.length > 0) {
+            // Throw error with combined messages to trigger catch block
+            throw new Error(executionErrors.join(' | '));
+        }
+
+        // --- SUCCESS CASE ---
         setQueue(prev => prev.map(i => i.id === nextItem.id ? { 
           ...i, 
           status: ProcessingStatus.SUCCESS, 
-          results 
+          results: currentResults 
         } : i));
         
         addLog(LogLevel.INFO, `Successfully processed ${nextItem.file.name}`);
         
-        // Auto Download
-        results.forEach(res => {
+        // Auto Download New Items (simple check: download all results, browsers usually handle duplicates/overwrite fine, 
+        // or user can just ignore. Ideally we'd track what was downloaded but keeping it simple)
+        currentResults.forEach(res => {
             if (res.type === 'report') {
                 triggerDownload(res.url, nextItem.file.name, '', 'md');
             } else {
                 let prefix = 'Line-';
                 if (res.type === 'model') prefix = 'Line-Model-';
+                if (res.type === 'model-full') prefix = 'Line-Model-Full-';
                 if (res.type === 'background') prefix = 'Line-Background-';
+                
                 triggerDownload(res.url, nextItem.file.name, prefix, 'png');
             }
         });
         addLog(LogLevel.INFO, `Triggered auto-downloads for ${nextItem.file.name}`);
 
       } catch (err: any) {
+        // --- ERROR/PARTIAL ERROR CASE ---
         const errorMsg = err.message || 'Unknown error';
         const nextRetryCount = nextItem.retryCount + 1;
         const newHistory = [...nextItem.errorHistory, errorMsg];
 
         // Determine if we should auto-retry
-        // We retry automatically for first 3 attempts (count 0, 1, 2)
-        // If nextRetryCount < AUTO_RETRY_LIMIT (3), we go back to PENDING immediately.
-        
         let nextStatus = ProcessingStatus.ERROR;
         
         if (nextRetryCount < AUTO_RETRY_LIMIT) {
             nextStatus = ProcessingStatus.PENDING;
-            addLog(LogLevel.INFO, `Auto-retrying ${nextItem.file.name} (Attempt ${nextRetryCount + 1})`);
+            addLog(LogLevel.INFO, `Auto-retrying ${nextItem.file.name} (Attempt ${nextRetryCount + 1}) - Errors: ${errorMsg}`);
         } else {
-            addLog(LogLevel.WARN, `Failed ${nextItem.file.name} after ${nextRetryCount} attempts. Waiting for manual retry.`);
+            addLog(LogLevel.WARN, `Failed ${nextItem.file.name} after ${nextRetryCount} attempts. Waiting for manual retry. Partial results saved.`);
         }
         
         setQueue(prev => prev.map(i => i.id === nextItem.id ? { 
@@ -271,14 +286,10 @@ export default function App() {
           status: nextStatus, 
           errorMessage: errorMsg,
           retryCount: nextRetryCount,
-          errorHistory: newHistory
+          errorHistory: newHistory,
+          results: currentResults // Persist whatever we managed to generate
         } : i));
         
-        if (errorMsg.includes("blocked by safety")) {
-          addLog(LogLevel.WARN, `Processing blocked for ${nextItem.file.name}: ${errorMsg}`);
-        } else {
-          addLog(LogLevel.ERROR, `Failed to process ${nextItem.file.name}`, err);
-        }
       } finally {
         setProcessingCount(prev => prev - 1);
         setProcessingStatus("");
@@ -286,7 +297,7 @@ export default function App() {
     };
 
     processNext();
-  }, [queue, processingCount, isProcessingEnabled, addLog]);
+  }, [queue, processingCount, isProcessingEnabled, addLog, gender]);
 
 
   // --- Render ---
@@ -336,6 +347,24 @@ export default function App() {
         </div>
 
         <div className="flex items-center space-x-3">
+            {/* Gender Dropdown */}
+            <div className="flex items-center space-x-2 bg-slate-800/50 rounded-lg px-2 border border-white/5">
+                <Users size={16} className="text-slate-400" />
+                <select 
+                    value={gender}
+                    onChange={(e) => setGender(e.target.value)}
+                    className="bg-transparent border-none text-sm text-slate-200 py-1.5 focus:ring-0 focus:outline-none cursor-pointer"
+                    title="Target Gender"
+                >
+                    <option value="As-is">As-is</option>
+                    <option value="Female">Female</option>
+                    <option value="Male">Male</option>
+                    <option value="Intersex">Intersex</option>
+                </select>
+            </div>
+
+            <div className="h-6 w-px bg-white/10 mx-1"></div>
+
             {/* Error Display Widget */}
             {lastError && (
               <div className="relative">
@@ -520,10 +549,10 @@ export default function App() {
                 <p className="text-sm">Start processing to generate line art.</p>
               </div>
             ) : (
-              <div className="columns-1 md:columns-2 lg:columns-3 xl:columns-4 gap-6 space-y-6">
+              <div className="columns-1 md:columns-2 lg:columns-3 xl:columns-4 gap-6">
                 {successQueue.flatMap(item => (
                   (item.results || []).map((result, idx) => (
-                    <div key={`${item.id}-${result.type}`} className="group relative break-inside-avoid bg-white rounded-xl overflow-hidden shadow-lg hover:shadow-2xl transition-all hover:scale-[1.02] border-4 border-white mb-6">
+                    <div key={`${item.id}-${result.type}`} className="inline-block w-full group relative break-inside-avoid bg-white rounded-xl overflow-hidden shadow-lg hover:shadow-2xl transition-all hover:scale-[1.02] border-4 border-white mb-6">
                       
                       {result.type === 'report' ? (
                           // Report Card
@@ -546,9 +575,10 @@ export default function App() {
                       <div className="absolute top-2 left-2 px-2 py-1 rounded bg-black/60 text-white text-[10px] uppercase font-bold tracking-wider backdrop-blur-sm flex items-center">
                         {result.type === 'full' && <Layers size={10} className="mr-1"/>}
                         {result.type === 'model' && <User size={10} className="mr-1"/>}
+                        {result.type === 'model-full' && <Expand size={10} className="mr-1 text-yellow-300"/>}
                         {result.type === 'background' && <Image size={10} className="mr-1"/>}
                         {result.type === 'report' && <FileText size={10} className="mr-1"/>}
-                        {result.type}
+                        {result.type === 'model-full' ? 'FULL BODY EXT' : result.type}
                       </div>
 
                       <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center space-y-3">
@@ -621,8 +651,14 @@ export default function App() {
              {errorQueue.map(item => (
                <div key={item.id} className="bg-red-500/10 border border-red-500/20 rounded-lg p-3">
                  <div className="flex items-start mb-2">
-                   <div className="w-12 h-12 rounded overflow-hidden bg-slate-900 shrink-0 border border-red-500/20">
+                   <div className="w-12 h-12 rounded overflow-hidden bg-slate-900 shrink-0 border border-red-500/20 relative">
                     <img src={item.thumbnailUrl} alt="Thumb" className="w-full h-full object-cover" />
+                    {/* Partial success indicator */}
+                    {(item.results && item.results.length > 0) && (
+                        <div className="absolute bottom-0 right-0 bg-emerald-500/80 text-[8px] text-white px-1" title={`${item.results.length} parts generated`}>
+                            {item.results.length}/3
+                        </div>
+                    )}
                   </div>
                   <div className="ml-3 min-w-0 flex-1">
                      <p className="text-sm font-medium text-slate-200 truncate">{item.file.name}</p>

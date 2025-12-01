@@ -7,7 +7,7 @@ export enum ProcessingStatus {
 }
 
 export interface GeneratedImage {
-  type: 'full' | 'model' | 'background' | 'report';
+  type: 'full' | 'model' | 'background' | 'report' | 'model-full';
   url: string;
 }
 

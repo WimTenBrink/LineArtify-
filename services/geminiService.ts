@@ -17,10 +17,38 @@ export const fileToGenerativePart = async (file: File): Promise<string> => {
   });
 };
 
+// Helper to convert Base64 string to Blob URL
+const base64ToBlobUrl = (base64Data: string, mimeType: string): string => {
+  const byteCharacters = atob(base64Data);
+  const byteNumbers = new Array(byteCharacters.length);
+  for (let i = 0; i < byteCharacters.length; i++) {
+    byteNumbers[i] = byteCharacters.charCodeAt(i);
+  }
+  const byteArray = new Uint8Array(byteNumbers);
+  const blob = new Blob([byteArray], { type: mimeType });
+  return URL.createObjectURL(blob);
+};
+
+// Helper to sanitize log data (remove huge base64 strings)
+const sanitizeForLog = (data: any): any => {
+  if (!data) return data;
+  try {
+    const str = JSON.stringify(data, (key, value) => {
+      if (typeof value === 'string' && value.length > 1000) {
+        return `<Large String (${value.length} chars) Omitted>`;
+      }
+      return value;
+    });
+    return JSON.parse(str);
+  } catch (e) {
+    return "Unable to sanitize data";
+  }
+};
+
 // Helper to crop image to content (non-white pixels) with padding
 // Optimized to be non-blocking for large images by processing in chunks
-const cropToContent = async (base64Data: string, padding: number = 10): Promise<string> => {
-  if (typeof window === 'undefined') return base64Data; // Safety check for SSR
+const cropToContent = async (imageUrl: string, padding: number = 10): Promise<string> => {
+  if (typeof window === 'undefined') return imageUrl; // Safety check for SSR
 
   return new Promise((resolve) => {
     const img = new Image();
@@ -30,7 +58,7 @@ const cropToContent = async (base64Data: string, padding: number = 10): Promise<
       canvas.width = img.width;
       canvas.height = img.height;
       const ctx = canvas.getContext('2d');
-      if (!ctx) { resolve(base64Data); return; }
+      if (!ctx) { resolve(imageUrl); return; }
 
       ctx.drawImage(img, 0, 0);
       const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
@@ -42,7 +70,8 @@ const cropToContent = async (base64Data: string, padding: number = 10): Promise<
       let found = false;
 
       // Process in chunks to avoid blocking the UI thread
-      const CHUNK_SIZE = 100; // Process 100 rows at a time
+      // REDUCED CHUNK SIZE for better responsiveness
+      const CHUNK_SIZE = 50; 
       let currentY = 0;
 
       const processChunk = () => {
@@ -70,7 +99,7 @@ const cropToContent = async (base64Data: string, padding: number = 10): Promise<
         currentY = endY;
 
         if (currentY < height) {
-          // Schedule next chunk
+          // Schedule next chunk with a slight delay to yield to main thread
           setTimeout(processChunk, 0);
         } else {
           // Finished processing all rows
@@ -80,7 +109,7 @@ const cropToContent = async (base64Data: string, padding: number = 10): Promise<
 
       const finalizeCrop = () => {
         if (!found) {
-          resolve(base64Data); // Return original if empty or pure white
+          resolve(imageUrl); // Return original if empty or pure white
           return;
         }
 
@@ -92,7 +121,7 @@ const cropToContent = async (base64Data: string, padding: number = 10): Promise<
         croppedCanvas.height = contentHeight + (padding * 2);
         const croppedCtx = croppedCanvas.getContext('2d');
         
-        if (!croppedCtx) { resolve(base64Data); return; }
+        if (!croppedCtx) { resolve(imageUrl); return; }
 
         // Fill white first
         croppedCtx.fillStyle = '#FFFFFF';
@@ -105,20 +134,28 @@ const cropToContent = async (base64Data: string, padding: number = 10): Promise<
           padding, padding, contentWidth, contentHeight
         );
 
-        resolve(croppedCanvas.toDataURL('image/png'));
+        // Use toBlob for async, non-blocking export
+        croppedCanvas.toBlob((blob) => {
+          if (blob) {
+            resolve(URL.createObjectURL(blob));
+          } else {
+            resolve(imageUrl);
+          }
+        }, 'image/png');
       };
 
       // Start processing
-      processChunk();
+      setTimeout(processChunk, 0);
     };
 
-    img.onerror = () => resolve(base64Data); // Fallback
-    img.src = base64Data; 
+    img.onerror = () => resolve(imageUrl); // Fallback
+    img.src = imageUrl; 
   });
 };
 
 const extractImageFromResponse = (response: any, logTitle: string, addLog: any): string => {
-    addLog(LogLevel.GEMINI_RESPONSE, `Generate Content Response: ${logTitle}`, response);
+    // Sanitize log to avoid storing massive base64 strings in memory/state
+    addLog(LogLevel.GEMINI_RESPONSE, `Generate Content Response: ${logTitle}`, sanitizeForLog(response));
 
     const candidate = response.candidates?.[0];
     
@@ -144,7 +181,8 @@ const extractImageFromResponse = (response: any, logTitle: string, addLog: any):
     for (const part of parts) {
       if (part.inlineData && part.inlineData.data) {
         const mimeType = part.inlineData.mimeType || 'image/png';
-        return `data:${mimeType};base64,${part.inlineData.data}`;
+        // Convert to Blob URL immediately to keep React state light and UI responsive
+        return base64ToBlobUrl(part.inlineData.data, mimeType);
       }
     }
 
@@ -156,12 +194,63 @@ const extractImageFromResponse = (response: any, logTitle: string, addLog: any):
     throw new Error(`Gemini did not return a valid image for ${logTitle}.`);
 };
 
+// Helper to check if the character is cropped
+const checkIfCropped = async (
+  ai: GoogleGenAI, 
+  base64Data: string, 
+  mimeType: string,
+  addLog: any
+): Promise<boolean> => {
+  try {
+    const prompt = `
+      Analyze the main character in this image.
+      Is the character's FULL BODY visible from head to toe?
+      
+      Return JSON: { "isCropped": boolean }
+      
+      Set isCropped to TRUE if:
+      - The feet are cut off.
+      - The legs are cut off.
+      - The head is cut off.
+      - It is a portrait/bust shot.
+      
+      Set isCropped to FALSE if:
+      - The entire body is visible (even if sitting or crouching, as long as whole body is in frame).
+    `;
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: {
+        parts: [
+          { inlineData: { mimeType, data: base64Data } },
+          { text: prompt }
+        ]
+      },
+      config: { responseMimeType: "application/json" }
+    });
+
+    const text = response.text;
+    addLog(LogLevel.INFO, "Cropping Check Response", text);
+    
+    if (text) {
+      const json = JSON.parse(text);
+      return !!json.isCropped;
+    }
+    return false;
+  } catch (e) {
+    addLog(LogLevel.WARN, "Failed to check cropping status, defaulting to false", e);
+    return false;
+  }
+};
+
 export const generateLineArtVariations = async (
   file: File, 
   apiKey: string,
+  gender: string,
+  existingResults: GeneratedImage[],
   addLog: (level: LogLevel, title: string, details?: any) => void,
   onStatusUpdate?: (message: string) => void
-): Promise<GeneratedImage[]> => {
+): Promise<{ results: GeneratedImage[], errors: string[] }> => {
   
   // Yield to UI to allow initial status render
   await new Promise(resolve => setTimeout(resolve, 0));
@@ -172,7 +261,14 @@ export const generateLineArtVariations = async (
   const base64Data = await fileToGenerativePart(file);
   const modelName = 'gemini-2.5-flash-image';
 
-  // --- Prompt 1: Full Image ---
+  // --- Prompts ---
+  
+  const genderInstruction = gender !== 'As-is' 
+    ? `IMPORTANT: Depict all characters as ${gender.toUpperCase()}. Adjust anatomy, facial features, and body proportions to clearly match this gender.` 
+    : "";
+
+  const styleInstruction = "Style: Clean, precise black lines. No shading, no gradients, no colors. Avoid excessive muscle definition; use smooth, simplified lines for anatomy to avoid an overly muscular look.";
+
   const promptFull = `
     You are an expert technical illustrator creating a high-fidelity line art reproduction.
     Task: Convert the provided image into a high-detail line art drawing.
@@ -180,10 +276,11 @@ export const generateLineArtVariations = async (
     Context:
     - This is an artistic tool for converting reference images. 
     - The input may contain artistic nudity. Treat this as a figure study.
+    - ${genderInstruction}
 
     Technical Requirements:
     - Output: PNG image with an Alpha Channel (Transparency).
-    - Style: Clean, precise black lines. No shading, no gradients, no colors.
+    - ${styleInstruction}
     - Content: Capture all details: characters, background, objects, textures.
     - Background: MUST be transparent. Do not render white pixels for the background.
     - Return ONLY the image.
@@ -194,7 +291,6 @@ export const generateLineArtVariations = async (
     - Do not add clothing or large censorship blocks.
   `;
 
-  // --- Prompt 2: Model Only (Base Figure) ---
   const promptModel = `
     You are an expert anatomical artist creating a base figure for a fashion design kit.
     Task: Extract the main character(s) as a clean line art figure.
@@ -202,17 +298,18 @@ export const generateLineArtVariations = async (
     Context:
     - The input image is an anatomical reference for fashion design.
     - It may contain artistic nudity.
+    - ${genderInstruction}
 
     Technical Requirements:
     - Output: PNG image with a SOLID WHITE background. NO transparency.
-    - Style: Clean, precise black lines on a pure white canvas.
+    - ${styleInstruction}
     - Background: Pure White (#FFFFFF).
 
     Content & Anatomy:
     - Isolate the character(s) completely.
-    - Generate a NUDE base figure to show full anatomy and muscle structure for fashion overlay.
+    - Generate a NUDE base figure to show full anatomy and structure for fashion overlay.
     - IMPORTANT: The figure must be BAREFOOT. Remove any footwear.
-    - Maintain exact pose and proportions from the original.
+    - Maintain exact pose and proportions from the original (unless gender adjustment requires changes).
     - Make the figure as nude as possible.
 
     Safety & Censorship:
@@ -223,7 +320,23 @@ export const generateLineArtVariations = async (
     - Keep the figure as "blank" as possible.
   `;
 
-  // --- Prompt 3: Background Only ---
+  const promptModelFull = `
+    You are an expert anatomical artist.
+    Task: Create a COMPLETE FULL BODY line art of the main character, even if the original image is cropped.
+    
+    Context:
+    - The user provided an image where the character might be missing feet, legs, or other parts.
+    - You MUST INVENT and DRAW the missing parts to show the character standing or posing naturally.
+    - ${genderInstruction}
+    
+    Technical Requirements:
+    - Output: PNG image with a SOLID WHITE background.
+    - ${styleInstruction}
+    - The figure must be complete from HEAD to TOE.
+    - If feet were missing, draw them (Barefoot).
+    - Maintain the pose of the visible parts, and extend it naturally for the missing parts.
+  `;
+
   const promptBackground = `
     You are an expert background artist for animation.
     Task: Create a line art of the BACKGROUND ONLY.
@@ -257,54 +370,63 @@ export const generateLineArtVariations = async (
     config: { safetySettings }
   });
 
-  addLog(LogLevel.INFO, `Starting parallel generation for ${file.name}`);
-  onStatusUpdate?.("Analyzing scene & Initializing Gemini models...");
+  addLog(LogLevel.INFO, `Starting sequential generation for ${file.name}`);
+  onStatusUpdate?.("Initializing Gemini models...");
 
-  try {
-    // Run 3 requests in parallel
-    const pFull = ai.models.generateContent(createPayload(promptFull))
-        .then(res => {
-            onStatusUpdate?.("Full Line Art generated...");
-            return res;
-        });
+  const results: GeneratedImage[] = [...existingResults];
+  const errors: string[] = [];
+
+  // Define tasks dynamically
+  const tasks: { type: string, prompt: string, name: string }[] = [
+    { type: 'full', prompt: promptFull, name: 'Full Line Art' },
+    { type: 'model', prompt: promptModel, name: 'Model Extraction' },
+    { type: 'background', prompt: promptBackground, name: 'Background' }
+  ];
+
+  // Logic to determine if we need the 4th "Full Body" task
+  // Only check if we don't already have it
+  if (!results.some(r => r.type === 'model-full')) {
+    onStatusUpdate?.("Checking for character cropping...");
+    const isCropped = await checkIfCropped(ai, base64Data, file.type, addLog);
     
-    const pModel = ai.models.generateContent(createPayload(promptModel))
-        .then(res => {
-            onStatusUpdate?.("Model extraction generated...");
-            return res;
-        });
-
-    const pBackground = ai.models.generateContent(createPayload(promptBackground))
-        .then(res => {
-            onStatusUpdate?.("Background generation completed...");
-            return res;
-        });
-
-    onStatusUpdate?.("Generating variations (Full, Model, Background)...");
-
-    const [responseFull, responseModel, responseBackground] = await Promise.all([pFull, pModel, pBackground]);
-
-    onStatusUpdate?.("Processing response data...");
-
-    const urlFull = extractImageFromResponse(responseFull, `${file.name} (Full)`, addLog);
-    let urlModel = extractImageFromResponse(responseModel, `${file.name} (Model)`, addLog);
-    const urlBackground = extractImageFromResponse(responseBackground, `${file.name} (Background)`, addLog);
-
-    // Post-process: Crop Model image
-    onStatusUpdate?.("Auto-cropping model image...");
-    urlModel = await cropToContent(urlModel, 10);
-
-    return [
-        { type: 'full', url: urlFull },
-        { type: 'model', url: urlModel },
-        { type: 'background', url: urlBackground }
-    ];
-
-  } catch (error: any) {
-    // Log the error here as info/warn to avoid system noise, caller handles status update
-    addLog(LogLevel.WARN, `Gemini API Exception for ${file.name}: ${error.message}`);
-    throw error;
+    if (isCropped) {
+      addLog(LogLevel.INFO, `Image ${file.name} detected as cropped. Adding Full Body Reconstruction task.`);
+      tasks.splice(2, 0, { type: 'model-full', prompt: promptModelFull, name: 'Full Body Reconstruction' });
+    } else {
+      addLog(LogLevel.INFO, `Image ${file.name} detected as full body. Skipping reconstruction.`);
+    }
   }
+
+  for (const task of tasks) {
+    // Skip if we already have this result from a previous attempt
+    if (results.some(r => r.type === task.type)) {
+      addLog(LogLevel.INFO, `Skipping ${task.name} for ${file.name} (Already exists)`);
+      continue;
+    }
+
+    try {
+      onStatusUpdate?.(`Generating ${task.name}...`);
+      
+      const response = await ai.models.generateContent(createPayload(task.prompt));
+      
+      let url = extractImageFromResponse(response, `${file.name} (${task.name})`, addLog);
+      
+      // Special post-processing for model types
+      if (task.type === 'model' || task.type === 'model-full') {
+         onStatusUpdate?.(`Auto-cropping ${task.name}...`);
+         url = await cropToContent(url, 10);
+      }
+
+      results.push({ type: task.type as any, url });
+      
+    } catch (error: any) {
+      addLog(LogLevel.WARN, `Failed to generate ${task.name}: ${error.message}`);
+      errors.push(`${task.name}: ${error.message}`);
+      // Continue to next task despite error
+    }
+  }
+
+  return { results, errors };
 };
 
 export const generateAnalysisReport = async (
@@ -362,7 +484,7 @@ export const generateAnalysisReport = async (
       }
     });
 
-    addLog(LogLevel.GEMINI_RESPONSE, `Analysis Report Response`, response);
+    addLog(LogLevel.GEMINI_RESPONSE, `Analysis Report Response`, sanitizeForLog(response));
     const text = response.text || "No analysis generated.";
     
     // Create Markdown file
