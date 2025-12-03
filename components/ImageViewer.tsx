@@ -20,6 +20,9 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext, onPrev
   const imgRef = useRef<HTMLImageElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
+  // Determine which URL to show (Result if success, Thumbnail if pending/processing/error)
+  const displayUrl = item.result?.url || item.thumbnailUrl;
+
   // Reset zoom when image changes
   useEffect(() => {
     setScale(1);
@@ -70,7 +73,7 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext, onPrev
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [hasNext, hasPrev, onNext, onPrev]);
 
-  if (!item.result?.url) return null;
+  if (!displayUrl) return null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-md">
@@ -87,6 +90,11 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext, onPrev
                     {item.personDescription && (
                         <span className="text-xs text-slate-300 italic truncate max-w-[200px]">
                              - {item.personDescription}
+                        </span>
+                    )}
+                    {!item.result && (
+                         <span className="text-xs text-amber-300 font-mono uppercase bg-amber-500/20 px-1.5 py-0.5 rounded">
+                            Source Image
                         </span>
                     )}
                 </div>
@@ -145,7 +153,7 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext, onPrev
         >
             <img 
               ref={imgRef}
-              src={item.result.url} 
+              src={displayUrl} 
               alt="Detailed View" 
               className="max-w-none transition-transform duration-75 ease-out select-none shadow-xl"
               style={{ 

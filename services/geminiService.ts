@@ -1,5 +1,4 @@
 
-
 import { GoogleGenAI } from "@google/genai";
 import { LogLevel, GeneratedImage, TaskType } from "../types";
 
@@ -195,12 +194,12 @@ const extractImageFromResponse = (response: any, logTitle: string, addLog: any):
     throw new Error(`Gemini did not return a valid image for ${logTitle}.`);
 };
 
-// NEW: Detect people in the image
+// NEW: Detect people in the image with Bounding Boxes
 export const detectPeople = async (
     file: File,
     apiKey: string,
     addLog: (level: LogLevel, title: string, details?: any) => void
-): Promise<string[]> => {
+): Promise<Array<{ description: string, box_2d?: number[] }>> => {
     await new Promise(resolve => setTimeout(resolve, 0));
     const ai = new GoogleGenAI({ apiKey });
     const base64Data = await fileToGenerativePart(file);
@@ -209,13 +208,18 @@ export const detectPeople = async (
 
     const prompt = `
         Analyze this image and identify all distinct human subjects.
-        Return a JSON list of strings, where each string is a unique, visual description of one person to distinguish them from others (e.g. "the man in the red shirt on the left", "the child sitting in the front").
-        
+        Return a JSON list of objects.
+        Each object must have:
+        - "description": A unique visual description (e.g. "man in red hat").
+        - "box_2d": A bounding box [ymin, xmin, ymax, xmax] normalized to 0-1000 scale.
+
         If there are NO people, return an empty list [].
-        If there is only ONE person, return ["the person"].
         
-        Example Output:
-        ["the woman in the blue dress", "the man wearing a hat"]
+        Example:
+        [
+          {"description": "woman in blue", "box_2d": [100, 100, 900, 500]},
+          {"description": "child in front", "box_2d": [500, 400, 800, 600]}
+        ]
     `;
 
     try {
@@ -240,12 +244,17 @@ export const detectPeople = async (
         const people = JSON.parse(jsonStr);
         
         if (Array.isArray(people)) {
-            return people.map(p => String(p));
+            // Validate structure
+            return people.map(p => ({
+                description: p.description || String(p),
+                box_2d: Array.isArray(p.box_2d) && p.box_2d.length === 4 ? p.box_2d : undefined
+            }));
         }
         return [];
     } catch (e: any) {
         addLog(LogLevel.ERROR, `Failed to detect people: ${e.message}`);
-        return ["the person"]; // Fallback to at least one person if scan fails but we are in a flow that expects people
+        // Fallback to text only if JSON parsing fails but we have some result, or empty if total failure
+        return [{ description: "the person" }]; 
     }
 };
 
@@ -254,6 +263,7 @@ export const generateLineArtTask = async (
   apiKey: string,
   taskType: TaskType,
   gender: string,
+  detailLevel: string,
   addLog: (level: LogLevel, title: string, details?: any) => void,
   onStatusUpdate?: (message: string) => void,
   personDescription?: string // Optional target
@@ -273,6 +283,16 @@ export const generateLineArtTask = async (
   const genderInstruction = gender !== 'As-is' 
     ? `IMPORTANT: Depict the subject as ${gender.toUpperCase()}. Adjust anatomy, facial features, and body proportions to clearly match this gender.` 
     : "";
+  
+  let detailInstruction = "";
+  if (detailLevel === 'Low') {
+    detailInstruction = "DETAIL LEVEL: LOW / SIMPLIFIED. Use fewer lines. Focus on the main silhouette and major shapes. Omit fine textures, small folds, and minor details. Create a clean, minimalist look.";
+  } else if (detailLevel === 'High') {
+    detailInstruction = "DETAIL LEVEL: HIGH / INTRICATE. Maximize detail. Capture every texture, fold, strand of hair, and surface nuance. Use intricate linework. Create a dense, highly detailed illustration.";
+  } else {
+    // Medium / Default
+    detailInstruction = "DETAIL LEVEL: MEDIUM / BALANCED. Capture essential details while maintaining clarity. Standard professional line art.";
+  }
 
   const styleInstruction = "Style: Strict BLACK AND WHITE line art. NO gray fills. NO colored surfaces. NO shading. Pure white background.";
   const orientationInstruction = "Orientation: Ensure the generated image is UPRIGHT and vertically aligned, correcting any rotation from the input image.";
@@ -299,6 +319,7 @@ export const generateLineArtTask = async (
     - This is an artistic tool for sketching and drawing based on photos.
     - ${allAgesInstruction}
     - ${genderInstruction}
+    - ${detailInstruction}
 
     Technical Requirements:
     - ${orientationInstruction}
@@ -318,6 +339,7 @@ export const generateLineArtTask = async (
     - ${targetInstruction}
     - ${allAgesInstruction}
     - ${genderInstruction}
+    - ${detailInstruction}
 
     Technical Requirements:
     - ${orientationInstruction}
@@ -344,6 +366,7 @@ export const generateLineArtTask = async (
     - You MUST INVENT and DRAW the missing parts to show the character standing or posing naturally.
     - ${allAgesInstruction}
     - ${genderInstruction}
+    - ${detailInstruction}
     
     Technical Requirements:
     - ${orientationInstruction}
@@ -370,6 +393,7 @@ export const generateLineArtTask = async (
     - ${targetInstruction}
     - ${allAgesInstruction}
     - ${genderInstruction}
+    - ${detailInstruction}
     
     Pose Requirements:
     - STAY STRICT WITH THE POSE. The limb positioning, head tilt, and stance must be identical to the original, just viewed from the opposite side.
@@ -390,6 +414,7 @@ export const generateLineArtTask = async (
     Context:
     - Remove ALL humans, characters, and animals.
     - INTELLIGENTLY FILL IN the missing parts where the characters used to be, reconstructing the scene behind them.
+    - ${detailInstruction}
     
     Technical Requirements:
     - ${orientationInstruction}
@@ -445,7 +470,7 @@ export const generateLineArtTask = async (
     config: { safetySettings }
   });
 
-  addLog(LogLevel.INFO, `Starting generation for ${file.name} [${taskName}]`);
+  addLog(LogLevel.INFO, `Starting generation for ${file.name} [${taskName}] with ${detailLevel} detail`);
   onStatusUpdate?.(`Generating ${taskName}...`);
 
   try {

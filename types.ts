@@ -18,6 +18,7 @@ export interface QueueItem {
   file: File;
   taskType: TaskType;
   personDescription?: string; // For multi-person extraction
+  detectBox?: number[]; // [ymin, xmin, ymax, xmax] normalized 0-1000
   thumbnailUrl: string;
   status: ProcessingStatus;
   result?: GeneratedImage;
