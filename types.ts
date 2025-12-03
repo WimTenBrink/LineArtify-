@@ -6,20 +6,24 @@ export enum ProcessingStatus {
   ERROR = 'ERROR'
 }
 
+export type TaskType = 'full' | 'model' | 'background' | 'model-full' | 'backside' | 'scan-people';
+
 export interface GeneratedImage {
-  type: 'full' | 'model' | 'background' | 'report' | 'model-full';
+  type: TaskType | 'report';
   url: string;
 }
 
 export interface QueueItem {
   id: string;
   file: File;
+  taskType: TaskType;
+  personDescription?: string; // For multi-person extraction
   thumbnailUrl: string;
   status: ProcessingStatus;
-  results?: GeneratedImage[];
+  result?: GeneratedImage;
   errorMessage?: string;
   timestamp: number;
-  retryCount: number;
+  retryCount: number; // Counts number of failures
   errorHistory: string[];
 }
 

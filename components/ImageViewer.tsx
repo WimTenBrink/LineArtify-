@@ -1,18 +1,30 @@
+
 import React, { useState, useRef, useEffect } from 'react';
-import { X, ZoomIn, ZoomOut, Maximize } from 'lucide-react';
+import { X, ZoomIn, ZoomOut, Maximize, ChevronLeft, ChevronRight } from 'lucide-react';
+import { QueueItem } from '../types';
 
 interface ImageViewerProps {
-  imageUrl: string;
+  item: QueueItem;
   onClose: () => void;
+  onNext?: () => void;
+  onPrev?: () => void;
+  hasNext: boolean;
+  hasPrev: boolean;
 }
 
-const ImageViewer: React.FC<ImageViewerProps> = ({ imageUrl, onClose }) => {
+const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext, onPrev, hasNext, hasPrev }) => {
   const [scale, setScale] = useState(1);
   const [position, setPosition] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const imgRef = useRef<HTMLImageElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  // Reset zoom when image changes
+  useEffect(() => {
+    setScale(1);
+    setPosition({ x: 0, y: 0 });
+  }, [item.id]);
 
   const handleWheel = (e: React.WheelEvent) => {
     e.stopPropagation();
@@ -47,25 +59,74 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ imageUrl, onClose }) => {
     setPosition({ x: 0, y: 0 });
   };
 
+  const handleKeyDown = (e: KeyboardEvent) => {
+    if (e.key === 'ArrowRight' && hasNext && onNext) onNext();
+    if (e.key === 'ArrowLeft' && hasPrev && onPrev) onPrev();
+    if (e.key === 'Escape') onClose();
+  };
+
+  useEffect(() => {
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [hasNext, hasPrev, onNext, onPrev]);
+
+  if (!item.result?.url) return null;
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-md">
       <div className="relative w-[95vw] h-[95vh] bg-[#181825] rounded-xl overflow-hidden shadow-2xl border border-slate-700 flex flex-col">
         
-        {/* Toolbar */}
-        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 flex items-center space-x-2 bg-slate-800/80 backdrop-blur p-2 rounded-full border border-white/10 shadow-lg">
-          <button onClick={zoomOut} className="p-2 hover:bg-white/10 rounded-full text-white"><ZoomOut size={20} /></button>
-          <span className="text-xs font-mono text-slate-300 w-12 text-center">{Math.round(scale * 100)}%</span>
-          <button onClick={zoomIn} className="p-2 hover:bg-white/10 rounded-full text-white"><ZoomIn size={20} /></button>
-          <div className="w-px h-4 bg-white/20 mx-2"></div>
-          <button onClick={reset} className="p-2 hover:bg-white/10 rounded-full text-white"><Maximize size={20} /></button>
+        {/* Header Config Info */}
+        <div className="absolute top-4 left-4 z-20 pointer-events-none">
+             <div className="bg-black/60 backdrop-blur text-white px-4 py-2 rounded-lg border border-white/10 shadow-lg">
+                <h3 className="font-bold text-sm">{item.file.name}</h3>
+                <div className="flex items-center space-x-2 mt-1">
+                    <span className="text-xs text-indigo-300 font-mono uppercase bg-indigo-500/20 px-1.5 py-0.5 rounded">
+                        {item.taskType}
+                    </span>
+                    {item.personDescription && (
+                        <span className="text-xs text-slate-300 italic truncate max-w-[200px]">
+                             - {item.personDescription}
+                        </span>
+                    )}
+                </div>
+             </div>
         </div>
 
+        {/* Toolbar */}
+        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-20 flex items-center space-x-2 bg-slate-800/80 backdrop-blur p-2 rounded-full border border-white/10 shadow-lg">
+          <button onClick={zoomOut} className="p-2 hover:bg-white/10 rounded-full text-white" title="Zoom Out"><ZoomOut size={20} /></button>
+          <span className="text-xs font-mono text-slate-300 w-12 text-center">{Math.round(scale * 100)}%</span>
+          <button onClick={zoomIn} className="p-2 hover:bg-white/10 rounded-full text-white" title="Zoom In"><ZoomIn size={20} /></button>
+          <div className="w-px h-4 bg-white/20 mx-2"></div>
+          <button onClick={reset} className="p-2 hover:bg-white/10 rounded-full text-white" title="Reset View"><Maximize size={20} /></button>
+        </div>
+
+        {/* Close Button */}
         <button 
           onClick={onClose}
-          className="absolute top-4 right-4 z-10 p-2 bg-slate-800/80 hover:bg-red-500/80 rounded-full text-white transition-colors border border-white/10"
+          className="absolute top-4 right-4 z-30 p-2 bg-slate-800/80 hover:bg-red-500/80 rounded-full text-white transition-colors border border-white/10"
         >
           <X size={24} />
         </button>
+
+        {/* Prev/Next Navigation */}
+        {hasPrev && (
+            <button 
+                onClick={onPrev}
+                className="absolute left-4 top-1/2 -translate-y-1/2 z-20 p-3 bg-black/40 hover:bg-white/10 rounded-full text-white transition-colors border border-white/5 backdrop-blur group"
+            >
+                <ChevronLeft size={32} className="opacity-70 group-hover:opacity-100" />
+            </button>
+        )}
+        {hasNext && (
+            <button 
+                onClick={onNext}
+                className="absolute right-4 top-1/2 -translate-y-1/2 z-20 p-3 bg-black/40 hover:bg-white/10 rounded-full text-white transition-colors border border-white/5 backdrop-blur group"
+            >
+                <ChevronRight size={32} className="opacity-70 group-hover:opacity-100" />
+            </button>
+        )}
 
         {/* Image Area */}
         <div 
@@ -84,7 +145,7 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ imageUrl, onClose }) => {
         >
             <img 
               ref={imgRef}
-              src={imageUrl} 
+              src={item.result.url} 
               alt="Detailed View" 
               className="max-w-none transition-transform duration-75 ease-out select-none shadow-xl"
               style={{ 
@@ -92,10 +153,6 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ imageUrl, onClose }) => {
               }}
               draggable={false}
             />
-        </div>
-        
-        <div className="absolute bottom-4 left-4 text-xs text-slate-500 font-mono pointer-events-none bg-white/80 px-2 py-1 rounded backdrop-blur-sm">
-          Scroll to zoom • Drag to pan
         </div>
       </div>
     </div>
