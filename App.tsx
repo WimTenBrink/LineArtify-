@@ -6,7 +6,7 @@ import Console from './components/Console';
 import ImageViewer from './components/ImageViewer';
 import ManualDialog from './components/ManualDialog';
 import { QueueItem, ProcessingStatus, LogLevel, LogEntry, GeneratedImage, TaskType } from './types';
-import { Upload, X, RefreshCw, AlertCircle, CheckCircle2, Image as ImageIcon, Terminal, Maximize, Play, Pause, Layers, User, Image, Trash2, Eraser, Key, ChevronDown, AlertTriangle, Brain, FileText, Users, Expand, Book, Repeat, Filter, ScanFace, Clock, ChevronUp, ChevronsUp, ChevronsDown, ZoomIn, Sliders, ArrowRightCircle, PersonStanding } from 'lucide-react';
+import { Upload, X, RefreshCw, AlertCircle, CheckCircle2, Image as ImageIcon, Terminal, Maximize, Play, Pause, Layers, User, Image, Trash2, Eraser, Key, ChevronDown, AlertTriangle, Brain, FileText, Users, Expand, Book, Repeat, Filter, ScanFace, Clock, ChevronUp, ChevronsUp, ChevronsDown, ZoomIn, Sliders, ArrowRightCircle, PersonStanding, CheckCheck, Save, FolderOpen, UserX } from 'lucide-react';
 
 const MAX_CONCURRENT_REQUESTS = 3;
 const MAX_RETRY_LIMIT = 5;
@@ -23,6 +23,16 @@ const TASK_DEFINITIONS: { type: TaskType, label: string }[] = [
     { type: 'scan-people', label: 'Scanning for People...' }
 ];
 
+// Helper for converting Blob/File to Base64 (Data URL)
+const blobToBase64 = (blob: Blob): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+};
+
 export default function App() {
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [processingCount, setProcessingCount] = useState(0);
@@ -36,7 +46,11 @@ export default function App() {
   const [detailLevel, setDetailLevel] = useState<string>('Medium'); // Detail Level State
   const [galleryFilter, setGalleryFilter] = useState<TaskType | 'ALL'>('ALL');
   const [jobDurations, setJobDurations] = useState<number[]>([]); // Track durations for estimation
+  const [highlightedId, setHighlightedId] = useState<string | null>(null);
   
+  // Hidden input ref for importing
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   // Task Selection State
   const [taskSelection, setTaskSelection] = useState({
     full: true,
@@ -58,16 +72,32 @@ export default function App() {
   
   // Filter input queue to show Pending, Processing, AND Success (so we don't hide finished jobs as requested)
   // Also respect the global type filter
+  // SORTING: Finished (Success) -> Processing -> Pending
   const inputQueue = queue.filter(item => 
     (item.status === ProcessingStatus.PENDING || 
      item.status === ProcessingStatus.PROCESSING || 
      item.status === ProcessingStatus.SUCCESS) &&
     (galleryFilter === 'ALL' || item.taskType === galleryFilter)
-  );
+  ).sort((a, b) => {
+      const score = (s: ProcessingStatus) => {
+          if (s === ProcessingStatus.SUCCESS) return 3;
+          if (s === ProcessingStatus.PROCESSING) return 2;
+          if (s === ProcessingStatus.PENDING) return 1;
+          return 0;
+      };
+      const diff = score(b.status) - score(a.status);
+      if (diff !== 0) return diff;
+      return 0; // Stable sort
+  });
   
   const successQueue = queue.filter(item => item.status === ProcessingStatus.SUCCESS && item.taskType !== 'scan-people');
   // Count only pending generation tasks for the estimator (exclude scans as they are fast/background)
   const pendingCount = queue.filter(item => item.status === ProcessingStatus.PENDING && item.taskType !== 'scan-people').length;
+
+  // Progress Calculation
+  const totalQueuedItems = queue.length;
+  const completedItems = queue.filter(i => i.status === ProcessingStatus.SUCCESS || i.status === ProcessingStatus.ERROR).length;
+  const progressPercentage = totalQueuedItems > 0 ? (completedItems / totalQueuedItems) * 100 : 0;
 
   // Apply filtering to the viewable gallery
   const filteredGallery = successQueue.filter(item => galleryFilter === 'ALL' || item.taskType === galleryFilter);
@@ -130,6 +160,16 @@ export default function App() {
       : 12000; // Default conservative start guess (12s)
   
   const estimatedMs = pendingCount * averageDuration;
+
+  // Scroll to highlighted item in gallery
+  useEffect(() => {
+    if (highlightedId) {
+        const el = document.getElementById(`gallery-item-${highlightedId}`);
+        if (el) {
+            el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+    }
+  }, [highlightedId]);
 
   // --- Handlers ---
 
@@ -307,6 +347,16 @@ export default function App() {
     setQueue(prev => prev.filter(i => i.status !== ProcessingStatus.ERROR));
     addLog(LogLevel.INFO, "Deleted all error items.");
   };
+  
+  const handleDeleteNoPeopleErrors = () => {
+    setQueue(prev => prev.filter(i => {
+       if (i.status !== ProcessingStatus.ERROR) return true;
+       // Keep item if error is NOT related to "No people"
+       const isNoPeopleError = i.errorMessage?.includes("No people detected") || i.errorMessage?.includes("All subjects too small");
+       return !isNoPeopleError;
+    }));
+    addLog(LogLevel.INFO, "Deleted 'No people detected' errors.");
+  };
 
   const handleClearGallery = () => {
     setQueue(prev => prev.filter(i => i.status !== ProcessingStatus.SUCCESS));
@@ -366,6 +416,130 @@ export default function App() {
     });
   };
 
+  // --- Export / Import Handlers ---
+  const handleExportQueue = async () => {
+    if (queue.length === 0) {
+      addLog(LogLevel.WARN, "Queue is empty. Nothing to export.");
+      return;
+    }
+
+    addLog(LogLevel.INFO, "Starting queue export...");
+    try {
+      // Serialize queue
+      const serializableQueue = await Promise.all(queue.map(async (item) => {
+        // Convert source file to Base64
+        const fileBase64 = await blobToBase64(item.file);
+        
+        // Convert result if exists (Generated Image is a Blob URL in memory)
+        let resultBase64 = null;
+        if (item.result?.url) {
+            try {
+                const res = await fetch(item.result.url);
+                const blob = await res.blob();
+                resultBase64 = await blobToBase64(blob);
+            } catch (e) {
+                console.warn("Could not serialize result blob for", item.id);
+            }
+        }
+
+        return {
+          ...item,
+          file: {
+            name: item.file.name,
+            type: item.file.type,
+            lastModified: item.file.lastModified,
+            data: fileBase64
+          },
+          result: item.result ? { ...item.result, url: resultBase64 } : undefined,
+          thumbnailUrl: null // We will regenerate this on import
+        };
+      }));
+
+      const exportData = {
+        version: 1,
+        timestamp: Date.now(),
+        queue: serializableQueue
+      };
+
+      const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `lineartify_queue_${new Date().toISOString().slice(0, 10)}.klj`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      
+      addLog(LogLevel.INFO, "Queue exported successfully.");
+    } catch (e: any) {
+      addLog(LogLevel.ERROR, `Failed to export queue: ${e.message}`);
+    }
+  };
+
+  const handleImportQueue = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      try {
+        const text = event.target?.result as string;
+        const json = JSON.parse(text);
+        
+        if (!json.queue || !Array.isArray(json.queue)) {
+          throw new Error("Invalid file format: Missing queue array.");
+        }
+
+        addLog(LogLevel.INFO, `Importing ${json.queue.length} items from ${file.name}...`);
+
+        const importedItems: QueueItem[] = await Promise.all(json.queue.map(async (item: any) => {
+           // Reconstruct File object from Base64
+           const res = await fetch(item.file.data);
+           const blob = await res.blob();
+           const reconstructedFile = new File([blob], item.file.name, { 
+             type: item.file.type, 
+             lastModified: item.file.lastModified 
+           });
+           
+           const thumbUrl = URL.createObjectURL(reconstructedFile);
+
+           // Reconstruct Result Blob URL from Base64
+           let reconstructedResult = undefined;
+           if (item.result && item.result.url) {
+               const resRes = await fetch(item.result.url);
+               const blobRes = await resRes.blob();
+               const resultUrl = URL.createObjectURL(blobRes);
+               reconstructedResult = { ...item.result, url: resultUrl };
+           }
+
+           return {
+             ...item,
+             file: reconstructedFile,
+             thumbnailUrl: thumbUrl,
+             result: reconstructedResult
+           };
+        }));
+
+        setQueue(prev => {
+           // Merge and deduplicate based on ID
+           const existingIds = new Set(prev.map(i => i.id));
+           const newItems = importedItems.filter(i => !existingIds.has(i.id));
+           
+           addLog(LogLevel.INFO, `Imported ${newItems.length} new items. (${importedItems.length - newItems.length} duplicates skipped)`);
+           return [...prev, ...newItems];
+        });
+
+      } catch (err: any) {
+        addLog(LogLevel.ERROR, `Failed to import queue: ${err.message}`);
+      } finally {
+        // Reset input
+        if (fileInputRef.current) fileInputRef.current.value = '';
+      }
+    };
+    reader.readAsText(file);
+  };
+
   const triggerDownload = (url: string, originalFilename: string, prefix: string, extension: string = 'png') => {
     try {
       const a = document.createElement('a');
@@ -400,8 +574,22 @@ export default function App() {
         try {
             // Detect People with Bounding Boxes
             const peopleRaw = await detectPeople(scanItem.file, apiKey, addLog);
-            // Limit to 10 people
-            const people = peopleRaw.slice(0, 10);
+            
+            // Filter by size (5% threshold)
+            const people = peopleRaw.filter(p => {
+                if (!p.box_2d) return true; // Keep if no box detected (fallback)
+                const [ymin, xmin, ymax, xmax] = p.box_2d;
+                const width = xmax - xmin;
+                const height = ymax - ymin;
+                const area = width * height;
+                const totalArea = 1000 * 1000;
+                // 5% of 1,000,000 is 50,000
+                if (area < 50000) {
+                    addLog(LogLevel.INFO, `Skipping person "${p.description}" - Size too small (${((area/totalArea)*100).toFixed(1)}%)`);
+                    return false;
+                }
+                return true;
+            }).slice(0, 10);
             
             // Create new tasks
             const newJobs: QueueItem[] = [];
@@ -482,11 +670,21 @@ export default function App() {
                  } : i));
                  
             } else if (newJobs.length === 0) {
-                 // People found but no tasks selected
-                 addLog(LogLevel.INFO, `Scan complete for ${scanItem.file.name}, but no character tasks selected.`);
-                 setQueue(prev => prev.filter(i => i.id !== scanItem.id));
+                 // People found but no tasks selected (or all filtered out by size)
+                 if (people.length === 0 && peopleRaw.length > 0) {
+                    addLog(LogLevel.INFO, `All detected people were too small in ${scanItem.file.name}.`);
+                    setQueue(prev => prev.map(i => i.id === scanItem.id ? { 
+                        ...i, 
+                        status: ProcessingStatus.ERROR, 
+                        errorMessage: "All subjects too small (<5%)", 
+                        retryCount: i.retryCount + 1
+                    } : i));
+                 } else {
+                    addLog(LogLevel.INFO, `Scan complete for ${scanItem.file.name}, but no character tasks selected.`);
+                    setQueue(prev => prev.filter(i => i.id !== scanItem.id));
+                 }
             } else {
-                 addLog(LogLevel.INFO, `Scan complete: ${peopleRaw.length} people found in ${scanItem.file.name} (Limited to top 10).`);
+                 addLog(LogLevel.INFO, `Scan complete: ${people.length} people added for ${scanItem.file.name}.`);
 
                 // Remove scan task and add new tasks
                 setQueue(prev => {
@@ -623,7 +821,14 @@ export default function App() {
       onDrop={handleDrop}
       onClick={() => isErrorDropdownOpen && setIsErrorDropdownOpen(false)}
     >
-      
+      <input 
+        type="file" 
+        ref={fileInputRef}
+        onChange={handleImportQueue} 
+        accept=".klj" 
+        className="hidden" 
+      />
+
       {/* Background Decor */}
       <div className="absolute top-0 left-0 w-full h-full overflow-hidden pointer-events-none z-0">
         <div className="absolute -top-[20%] -left-[10%] w-[50%] h-[50%] bg-indigo-900/20 rounded-full blur-[120px]"></div>
@@ -796,6 +1001,22 @@ export default function App() {
             >
               <Key size={20} />
             </button>
+            
+             {/* Import/Export Queue */}
+             <button
+              onClick={() => fileInputRef.current?.click()}
+              className="p-2 text-slate-400 hover:text-white hover:bg-white/10 rounded-lg transition-colors"
+              title="Load Queue (.klj)"
+            >
+              <FolderOpen size={20} />
+            </button>
+             <button
+              onClick={handleExportQueue}
+              className="p-2 text-slate-400 hover:text-white hover:bg-white/10 rounded-lg transition-colors"
+              title="Save Queue (.klj)"
+            >
+              <Save size={20} />
+            </button>
 
              {/* Manual Button */}
              <button
@@ -838,6 +1059,16 @@ export default function App() {
               )}
             </button>
         </div>
+
+        {/* Progress Bar (Attached to bottom of header) */}
+        {totalQueuedItems > 0 && (
+            <div className="absolute bottom-0 left-0 w-full h-1 bg-slate-800">
+                <div 
+                    className="h-full bg-gradient-to-r from-indigo-500 to-purple-500 transition-all duration-500 ease-out shadow-[0_0_10px_rgba(99,102,241,0.5)]"
+                    style={{ width: `${progressPercentage}%` }}
+                />
+            </div>
+        )}
       </header>
 
       {/* Main Content Area */}
@@ -850,13 +1081,22 @@ export default function App() {
             <div className="flex items-center space-x-2">
                 <span className="text-xs font-mono bg-indigo-500/20 text-indigo-300 px-2 py-0.5 rounded-full">{inputQueue.length}</span>
                 {inputQueue.length > 0 && (
-                  <button 
-                    onClick={handleClearInputQueue}
-                    title="Clean Queue"
-                    className="p-1.5 text-slate-400 hover:text-red-400 hover:bg-red-500/10 rounded-md transition-colors"
-                  >
-                    <Trash2 size={16} />
-                  </button>
+                  <div className="flex space-x-1">
+                      <button 
+                        onClick={handleClearGallery}
+                        title="Delete All Completed"
+                        className="p-1.5 text-slate-400 hover:text-emerald-400 hover:bg-emerald-500/10 rounded-md transition-colors"
+                      >
+                        <CheckCheck size={16} />
+                      </button>
+                      <button 
+                        onClick={handleClearInputQueue}
+                        title="Clean Queue (Pending)"
+                        className="p-1.5 text-slate-400 hover:text-red-400 hover:bg-red-500/10 rounded-md transition-colors"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                  </div>
                 )}
             </div>
           </div>
@@ -896,7 +1136,12 @@ export default function App() {
                     </div>
                     {/* Items */}
                     {items.map((item, idx) => (
-                      <div key={item.id} className="flex flex-col border-b border-white/5 relative group bg-slate-900 last:border-0">
+                      <div 
+                        key={item.id} 
+                        className="flex flex-col border-b border-white/5 relative group bg-slate-900 last:border-0"
+                        onMouseEnter={() => item.status === ProcessingStatus.SUCCESS && setHighlightedId(item.id)}
+                        onMouseLeave={() => setHighlightedId(null)}
+                      >
                         
                         {/* Image Area - Full Width */}
                         <div 
@@ -1102,7 +1347,11 @@ export default function App() {
                         key={item.id} 
                         id={`gallery-item-${item.id}`}
                         onClick={() => setViewerItemId(item.id)}
-                        className="inline-block w-full group relative break-inside-avoid bg-white rounded-xl overflow-hidden shadow-lg hover:shadow-2xl transition-all hover:scale-[1.02] border-4 border-white mb-6 scroll-mt-20 cursor-zoom-in"
+                        className={`inline-block w-full group relative break-inside-avoid bg-white rounded-xl overflow-hidden shadow-lg transition-all border-4 border-white mb-6 scroll-mt-20 cursor-zoom-in ${
+                            highlightedId === item.id 
+                                ? 'ring-4 ring-indigo-500 scale-[1.02] shadow-2xl z-10' 
+                                : 'hover:scale-[1.02] hover:shadow-2xl'
+                        }`}
                     >
                       {/* Image Card with Max Height Constraint */}
                       <div className="w-full flex justify-center bg-gray-50">
@@ -1180,6 +1429,13 @@ export default function App() {
                   className="flex-1 py-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-300 text-xs font-bold uppercase tracking-wider rounded border border-red-500/20 transition-colors flex items-center justify-center"
                 >
                   <RefreshCw size={12} className="mr-2" /> Retry Valid
+                </button>
+                <button 
+                  onClick={handleDeleteNoPeopleErrors}
+                  className="w-8 py-1.5 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-300 text-xs font-bold uppercase tracking-wider rounded border border-indigo-500/20 transition-colors flex items-center justify-center"
+                  title="Delete 'No People' Errors"
+                >
+                  <UserX size={12} />
                 </button>
                 <button 
                   onClick={handleDeleteAllErrors}

@@ -306,6 +306,7 @@ export const generateLineArtTask = async (
   const orientationInstruction = "Orientation: Ensure the generated image is UPRIGHT and vertically aligned, correcting any rotation from the input image.";
   const allAgesInstruction = "Subject: The subject may be of any age. Create a respectful, general-purpose figure study.";
   const cyberneticInstruction = "CYBERNETICS: If the subject has cybernetic limbs, prosthetics, or mechanical body parts, PRESERVE THEM EXACTLY. Do not convert them to biological skin. Treat them as part of the subject's anatomy.";
+  const bodyTypeInstruction = "BODY TYPE: Natural, realistic proportions. Do NOT exaggerate muscles. Do NOT create hyper-muscular or superhero physiques. Keep the anatomy lean and natural.";
   
   const strictPoseInstruction = `
     CRITICAL POSE ADHERENCE:
@@ -330,6 +331,7 @@ export const generateLineArtTask = async (
     - ${genderInstruction}
     - ${detailInstruction}
     - ${cyberneticInstruction}
+    - ${bodyTypeInstruction}
 
     Technical Requirements:
     - ${orientationInstruction}
@@ -351,6 +353,7 @@ export const generateLineArtTask = async (
     - ${genderInstruction}
     - ${detailInstruction}
     - ${cyberneticInstruction}
+    - ${bodyTypeInstruction}
 
     Technical Requirements:
     - ${orientationInstruction}
@@ -379,6 +382,7 @@ export const generateLineArtTask = async (
     - ${genderInstruction}
     - ${detailInstruction}
     - ${cyberneticInstruction}
+    - ${bodyTypeInstruction}
     
     Technical Requirements:
     - ${orientationInstruction}
@@ -407,6 +411,7 @@ export const generateLineArtTask = async (
     - ${genderInstruction}
     - ${detailInstruction}
     - ${cyberneticInstruction}
+    - ${bodyTypeInstruction}
     
     Pose Requirements:
     - STAY STRICT WITH THE POSE. The limb positioning, head tilt, and stance must be identical to the original, just viewed from the opposite side.
@@ -454,6 +459,7 @@ export const generateLineArtTask = async (
     - ${allAgesInstruction}
     - ${genderInstruction}
     - ${detailInstruction}
+    - ${bodyTypeInstruction}
 
     Technical Requirements:
     - ${orientationInstruction}
@@ -479,6 +485,7 @@ export const generateLineArtTask = async (
     - ${allAgesInstruction}
     - ${genderInstruction}
     - ${detailInstruction}
+    - ${bodyTypeInstruction}
     
     Technical Requirements:
     - ${orientationInstruction}
