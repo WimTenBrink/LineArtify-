@@ -194,6 +194,13 @@ const extractImageFromResponse = (response: any, logTitle: string, addLog: any):
     throw new Error(`Gemini did not return a valid image for ${logTitle}.`);
 };
 
+const SAFETY_SETTINGS_BLOCK_NONE = [
+    { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
+    { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
+    { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' },
+    { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' }
+];
+
 // NEW: Detect people in the image with Bounding Boxes
 export const detectPeople = async (
     file: File,
@@ -232,7 +239,8 @@ export const detectPeople = async (
                 ]
             },
             config: {
-                responseMimeType: 'application/json'
+                responseMimeType: 'application/json',
+                safetySettings: SAFETY_SETTINGS_BLOCK_NONE
             }
         });
 
@@ -297,6 +305,7 @@ export const generateLineArtTask = async (
   const styleInstruction = "Style: Strict BLACK AND WHITE line art. NO gray fills. NO colored surfaces. NO shading. Pure white background.";
   const orientationInstruction = "Orientation: Ensure the generated image is UPRIGHT and vertically aligned, correcting any rotation from the input image.";
   const allAgesInstruction = "Subject: The subject may be of any age. Create a respectful, general-purpose figure study.";
+  const cyberneticInstruction = "CYBERNETICS: If the subject has cybernetic limbs, prosthetics, or mechanical body parts, PRESERVE THEM EXACTLY. Do not convert them to biological skin. Treat them as part of the subject's anatomy.";
   
   const strictPoseInstruction = `
     CRITICAL POSE ADHERENCE:
@@ -320,6 +329,7 @@ export const generateLineArtTask = async (
     - ${allAgesInstruction}
     - ${genderInstruction}
     - ${detailInstruction}
+    - ${cyberneticInstruction}
 
     Technical Requirements:
     - ${orientationInstruction}
@@ -340,6 +350,7 @@ export const generateLineArtTask = async (
     - ${allAgesInstruction}
     - ${genderInstruction}
     - ${detailInstruction}
+    - ${cyberneticInstruction}
 
     Technical Requirements:
     - ${orientationInstruction}
@@ -367,6 +378,7 @@ export const generateLineArtTask = async (
     - ${allAgesInstruction}
     - ${genderInstruction}
     - ${detailInstruction}
+    - ${cyberneticInstruction}
     
     Technical Requirements:
     - ${orientationInstruction}
@@ -394,6 +406,7 @@ export const generateLineArtTask = async (
     - ${allAgesInstruction}
     - ${genderInstruction}
     - ${detailInstruction}
+    - ${cyberneticInstruction}
     
     Pose Requirements:
     - STAY STRICT WITH THE POSE. The limb positioning, head tilt, and stance must be identical to the original, just viewed from the opposite side.
@@ -424,12 +437,55 @@ export const generateLineArtTask = async (
     - Content: Only the environment (rooms, nature, buildings, furniture). NO PEOPLE.
   `;
 
-  const safetySettings = [
-    { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
-    { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
-    { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' },
-    { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' }
-  ];
+  const promptNude = `
+    You are an expert anatomical artist doing a FIGURE STUDY.
+    Task: Draw the subject as a neutral ANATOMICAL FIGURE or BASE MESH (Nude/No Clothes) to capture the pure pose.
+    
+    CRITICAL REQUIREMENTS:
+    - ${targetInstruction}
+    - CLOTHING: REMOVE ALL CLOTHING. Draw the bare skin surface and muscle structure.
+    - ${cyberneticInstruction}
+    - SAFETY/MODESTY: This is an artistic anatomy study. DO NOT draw explicit genitalia or sexual features. Use "Barbie/Ken doll" smooth surfaces for private areas. The goal is POSE REFERENCE, not adult content.
+    - POSE: Copy the EXACT pose, hands, fingers, and facial expression of the subject.
+    - FULL BODY: Ensure the drawing is FULL BODY. If feet/legs are cropped in the photo, you MUST reconstruct them to show the full standing/sitting figure.
+    - FACE/HANDS: Keep facial details (eyes, nose, mouth) and hands distinct and accurate.
+    
+    Context:
+    - ${allAgesInstruction}
+    - ${genderInstruction}
+    - ${detailInstruction}
+
+    Technical Requirements:
+    - ${orientationInstruction}
+    - Output: PNG image with a SOLID WHITE background.
+    - ${styleInstruction}
+    - Background: Pure White (#FFFFFF).
+  `;
+
+  const promptNudeOpposite = `
+    You are an expert anatomical artist doing a FIGURE STUDY from the OPPOSITE ANGLE.
+    Task: Draw the subject as a neutral ANATOMICAL FIGURE (Nude/No Clothes) from the 180-degree REVERSE VIEW.
+    
+    CRITICAL INSTRUCTION:
+    - Analyze input view -> Generate COMPLEMENTARY view (Front->Back, Back->Front, Left->Right).
+    - CLOTHING: REMOVE ALL CLOTHING. Draw the bare skin surface and muscle structure.
+    - ${cyberneticInstruction}
+    - SAFETY/MODESTY: Non-explicit anatomical study. No genitalia. Use smooth mannequin surfaces.
+    - POSE: Keep the exact limb positioning and stance, just viewed from the other side.
+    - FULL BODY: MUST be full body. Invent missing legs/feet if needed.
+    
+    Context:
+    - ${targetInstruction}
+    - ${allAgesInstruction}
+    - ${genderInstruction}
+    - ${detailInstruction}
+    
+    Technical Requirements:
+    - ${orientationInstruction}
+    - Output: PNG image with a SOLID WHITE background.
+    - ${styleInstruction}
+    - Background: Pure White (#FFFFFF).
+  `;
 
   let prompt = promptFull;
   let taskName = "Full Line Art";
@@ -455,6 +511,14 @@ export const generateLineArtTask = async (
           prompt = promptOpposite;
           taskName = personDescription ? `Opposite View (${personDescription})` : "Opposite View";
           break;
+      case 'nude':
+          prompt = promptNude;
+          taskName = personDescription ? `Body Pose/Nude (${personDescription})` : "Body Pose/Nude";
+          break;
+      case 'nude-opposite':
+          prompt = promptNudeOpposite;
+          taskName = personDescription ? `Opposite Body/Nude (${personDescription})` : "Opposite Body/Nude";
+          break;
       case 'scan-people':
           throw new Error("Scan task should not call generateLineArtTask");
   }
@@ -467,7 +531,7 @@ export const generateLineArtTask = async (
         { text: promptStr }
       ]
     },
-    config: { safetySettings }
+    config: { safetySettings: SAFETY_SETTINGS_BLOCK_NONE }
   });
 
   addLog(LogLevel.INFO, `Starting generation for ${file.name} [${taskName}] with ${detailLevel} detail`);
@@ -479,7 +543,8 @@ export const generateLineArtTask = async (
       let url = extractImageFromResponse(response, `${file.name} (${taskName})`, addLog);
       
       // Special post-processing for model types
-      if (taskType === 'model' || taskType === 'model-full' || taskType === 'backside') {
+      // Updated to include 'nude' and 'nude-opposite' in the auto-crop logic
+      if (['model', 'model-full', 'backside', 'nude', 'nude-opposite'].includes(taskType)) {
          onStatusUpdate?.(`Auto-cropping ${taskName}...`);
          url = await cropToContent(url, 10);
       }

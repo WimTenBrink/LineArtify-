@@ -6,7 +6,7 @@ export enum ProcessingStatus {
   ERROR = 'ERROR'
 }
 
-export type TaskType = 'full' | 'model' | 'background' | 'model-full' | 'backside' | 'scan-people';
+export type TaskType = 'full' | 'model' | 'background' | 'model-full' | 'backside' | 'scan-people' | 'nude' | 'nude-opposite';
 
 export interface GeneratedImage {
   type: TaskType;

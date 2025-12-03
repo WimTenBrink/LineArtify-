@@ -6,9 +6,9 @@ import Console from './components/Console';
 import ImageViewer from './components/ImageViewer';
 import ManualDialog from './components/ManualDialog';
 import { QueueItem, ProcessingStatus, LogLevel, LogEntry, GeneratedImage, TaskType } from './types';
-import { Upload, X, RefreshCw, AlertCircle, CheckCircle2, Image as ImageIcon, Terminal, Maximize, Play, Pause, Layers, User, Image, Trash2, Eraser, Key, ChevronDown, AlertTriangle, Brain, FileText, Users, Expand, Book, Repeat, Filter, ScanFace, Clock, ChevronUp, ChevronsUp, ChevronsDown, ZoomIn, Sliders, ArrowRightCircle } from 'lucide-react';
+import { Upload, X, RefreshCw, AlertCircle, CheckCircle2, Image as ImageIcon, Terminal, Maximize, Play, Pause, Layers, User, Image, Trash2, Eraser, Key, ChevronDown, AlertTriangle, Brain, FileText, Users, Expand, Book, Repeat, Filter, ScanFace, Clock, ChevronUp, ChevronsUp, ChevronsDown, ZoomIn, Sliders, ArrowRightCircle, PersonStanding } from 'lucide-react';
 
-const MAX_CONCURRENT_REQUESTS = 1;
+const MAX_CONCURRENT_REQUESTS = 3;
 const MAX_RETRY_LIMIT = 5;
 
 // Definitions including the special 'scan-people' task which isn't shown as a final type usually
@@ -18,6 +18,8 @@ const TASK_DEFINITIONS: { type: TaskType, label: string }[] = [
     { type: 'background', label: 'Background Only' },
     { type: 'model-full', label: 'Body Reconstruction' },
     { type: 'backside', label: 'Opposite View' },
+    { type: 'nude', label: 'Nude' },
+    { type: 'nude-opposite', label: 'Nude Opposite' },
     { type: 'scan-people', label: 'Scanning for People...' }
 ];
 
@@ -34,6 +36,17 @@ export default function App() {
   const [detailLevel, setDetailLevel] = useState<string>('Medium'); // Detail Level State
   const [galleryFilter, setGalleryFilter] = useState<TaskType | 'ALL'>('ALL');
   const [jobDurations, setJobDurations] = useState<number[]>([]); // Track durations for estimation
+  
+  // Task Selection State
+  const [taskSelection, setTaskSelection] = useState({
+    full: true,
+    model: true,
+    background: true,
+    backside: true,
+    nude: false,
+    nudeOpposite: false
+  });
+
   const { addLog, logs } = useLogger();
 
   // Drag and drop state
@@ -41,6 +54,8 @@ export default function App() {
   const dragCounter = useRef(0);
 
   // Derived state
+  const allSelected = Object.values(taskSelection).every(Boolean);
+  
   // Filter input queue to show Pending, Processing, AND Success (so we don't hide finished jobs as requested)
   // Also respect the global type filter
   const inputQueue = queue.filter(item => 
@@ -118,6 +133,22 @@ export default function App() {
 
   // --- Handlers ---
 
+  const toggleAll = () => {
+    const newState = !allSelected;
+    setTaskSelection({
+      full: newState,
+      model: newState,
+      background: newState,
+      backside: newState,
+      nude: newState,
+      nudeOpposite: newState
+    });
+  };
+
+  const toggleTask = (key: keyof typeof taskSelection) => {
+    setTaskSelection(prev => ({ ...prev, [key]: !prev[key] }));
+  };
+
   const handleApiKeyChange = async () => {
     try {
       if ((window as any).aistudio && (window as any).aistudio.openSelectKey) {
@@ -143,30 +174,45 @@ export default function App() {
           const thumbUrl = URL.createObjectURL(file);
 
           // Standard global tasks (Scene level)
-          ['full', 'background'].forEach(type => {
-              newItems.push({
+          if (taskSelection.full) {
+             newItems.push({
                   id: crypto.randomUUID(),
                   file,
-                  taskType: type as TaskType,
+                  taskType: 'full',
                   thumbnailUrl: thumbUrl,
                   status: ProcessingStatus.PENDING,
                   timestamp,
                   retryCount: 0,
                   errorHistory: []
               });
-          });
+          }
+          
+          if (taskSelection.background) {
+             newItems.push({
+                  id: crypto.randomUUID(),
+                  file,
+                  taskType: 'background',
+                  thumbnailUrl: thumbUrl,
+                  status: ProcessingStatus.PENDING,
+                  timestamp,
+                  retryCount: 0,
+                  errorHistory: []
+              });
+          }
 
-          // Special Scan Task (Detects people -> Spawns Model & Backside tasks)
-          newItems.push({
-              id: crypto.randomUUID(),
-              file,
-              taskType: 'scan-people',
-              thumbnailUrl: thumbUrl,
-              status: ProcessingStatus.PENDING,
-              timestamp,
-              retryCount: 0,
-              errorHistory: []
-          });
+          // Special Scan Task (Detects people -> Spawns Model, Backside, Nude tasks)
+          if (taskSelection.model || taskSelection.backside || taskSelection.nude || taskSelection.nudeOpposite) {
+              newItems.push({
+                  id: crypto.randomUUID(),
+                  file,
+                  taskType: 'scan-people',
+                  thumbnailUrl: thumbUrl,
+                  status: ProcessingStatus.PENDING,
+                  timestamp,
+                  retryCount: 0,
+                  errorHistory: []
+              });
+          }
       });
 
     if (newItems.length > 0) {
@@ -182,7 +228,7 @@ export default function App() {
           return prev;
       });
     }
-  }, [addLog]);
+  }, [addLog, taskSelection]);
 
   // Global DnD Handlers
   const handleDragEnter = useCallback((e: React.DragEvent) => {
@@ -353,41 +399,79 @@ export default function App() {
 
         try {
             // Detect People with Bounding Boxes
-            const people = await detectPeople(scanItem.file, apiKey, addLog);
+            const peopleRaw = await detectPeople(scanItem.file, apiKey, addLog);
+            // Limit to 10 people
+            const people = peopleRaw.slice(0, 10);
             
             // Create new tasks
             const newJobs: QueueItem[] = [];
             people.forEach(personData => {
                 // Job 1: Character Extraction (Model View)
-                newJobs.push({
-                    id: crypto.randomUUID(),
-                    file: scanItem.file,
-                    taskType: 'model',
-                    personDescription: personData.description,
-                    detectBox: personData.box_2d, // Pass the box
-                    thumbnailUrl: scanItem.thumbnailUrl,
-                    status: ProcessingStatus.PENDING,
-                    timestamp: Date.now(),
-                    retryCount: 0,
-                    errorHistory: []
-                });
+                if (taskSelection.model) {
+                  newJobs.push({
+                      id: crypto.randomUUID(),
+                      file: scanItem.file,
+                      taskType: 'model',
+                      personDescription: personData.description,
+                      detectBox: personData.box_2d, // Pass the box
+                      thumbnailUrl: scanItem.thumbnailUrl,
+                      status: ProcessingStatus.PENDING,
+                      timestamp: Date.now(),
+                      retryCount: 0,
+                      errorHistory: []
+                  });
+                }
 
                 // Job 2: Opposite View (Backside)
-                newJobs.push({
-                    id: crypto.randomUUID(),
-                    file: scanItem.file,
-                    taskType: 'backside',
-                    personDescription: personData.description,
-                    detectBox: personData.box_2d, // Pass the box
-                    thumbnailUrl: scanItem.thumbnailUrl,
-                    status: ProcessingStatus.PENDING,
-                    timestamp: Date.now(),
-                    retryCount: 0,
-                    errorHistory: []
-                });
+                if (taskSelection.backside) {
+                  newJobs.push({
+                      id: crypto.randomUUID(),
+                      file: scanItem.file,
+                      taskType: 'backside',
+                      personDescription: personData.description,
+                      detectBox: personData.box_2d, // Pass the box
+                      thumbnailUrl: scanItem.thumbnailUrl,
+                      status: ProcessingStatus.PENDING,
+                      timestamp: Date.now(),
+                      retryCount: 0,
+                      errorHistory: []
+                  });
+                }
+
+                // Job 3: Nude / Body Pose
+                if (taskSelection.nude) {
+                  newJobs.push({
+                      id: crypto.randomUUID(),
+                      file: scanItem.file,
+                      taskType: 'nude',
+                      personDescription: personData.description,
+                      detectBox: personData.box_2d,
+                      thumbnailUrl: scanItem.thumbnailUrl,
+                      status: ProcessingStatus.PENDING,
+                      timestamp: Date.now(),
+                      retryCount: 0,
+                      errorHistory: []
+                  });
+                }
+
+                // Job 4: Nude Opposite
+                if (taskSelection.nudeOpposite) {
+                  newJobs.push({
+                      id: crypto.randomUUID(),
+                      file: scanItem.file,
+                      taskType: 'nude-opposite',
+                      personDescription: personData.description,
+                      detectBox: personData.box_2d,
+                      thumbnailUrl: scanItem.thumbnailUrl,
+                      status: ProcessingStatus.PENDING,
+                      timestamp: Date.now(),
+                      retryCount: 0,
+                      errorHistory: []
+                  });
+                }
             });
 
-            if (newJobs.length === 0) {
+            if (peopleRaw.length === 0) {
                  addLog(LogLevel.WARN, `No people detected in ${scanItem.file.name}. Moving to error queue.`);
                  
                  setQueue(prev => prev.map(i => i.id === scanItem.id ? { 
@@ -397,8 +481,12 @@ export default function App() {
                     retryCount: i.retryCount + 1
                  } : i));
                  
+            } else if (newJobs.length === 0) {
+                 // People found but no tasks selected
+                 addLog(LogLevel.INFO, `Scan complete for ${scanItem.file.name}, but no character tasks selected.`);
+                 setQueue(prev => prev.filter(i => i.id !== scanItem.id));
             } else {
-                 addLog(LogLevel.INFO, `Scan complete: ${people.length} people found in ${scanItem.file.name}.`);
+                 addLog(LogLevel.INFO, `Scan complete: ${peopleRaw.length} people found in ${scanItem.file.name} (Limited to top 10).`);
 
                 // Remove scan task and add new tasks
                 setQueue(prev => {
@@ -422,7 +510,7 @@ export default function App() {
     };
 
     processScanQueue();
-  }, [queue, addLog]);
+  }, [queue, addLog, taskSelection]);
 
   // --- Main Generation Processing Logic ---
 
@@ -432,7 +520,16 @@ export default function App() {
       if (processingCount >= MAX_CONCURRENT_REQUESTS) return;
 
       // Skip scan tasks here, they are handled by the effect above
-      const nextItem = queue.find(item => item.status === ProcessingStatus.PENDING && item.taskType !== 'scan-people');
+      // Prioritize 'nude' and 'nude-opposite' tasks
+      const pendingItems = queue.filter(item => item.status === ProcessingStatus.PENDING && item.taskType !== 'scan-people');
+      const nextItem = pendingItems.sort((a, b) => {
+          const isAPriority = a.taskType === 'nude' || a.taskType === 'nude-opposite';
+          const isBPriority = b.taskType === 'nude' || b.taskType === 'nude-opposite';
+          if (isAPriority && !isBPriority) return -1;
+          if (!isAPriority && isBPriority) return 1;
+          return a.timestamp - b.timestamp; // FIFO for same priority
+      })[0];
+
       if (!nextItem) return;
 
       setProcessingCount(prev => prev + 1);
@@ -481,6 +578,8 @@ export default function App() {
             if (result.type === 'model-full') prefix = 'Line-Model-Full-';
             if (result.type === 'background') prefix = 'Line-Background-';
             if (result.type === 'backside') prefix = 'Line-Opposite-';
+            if (result.type === 'nude') prefix = 'Line-Nude-';
+            if (result.type === 'nude-opposite') prefix = 'Line-Nude-Opposite-';
             
             if (nextItem.personDescription) {
                 prefix += 'Person-';
@@ -571,6 +670,41 @@ export default function App() {
             {/* Settings Group */}
             <div className="flex items-center bg-slate-800/50 rounded-lg p-1 border border-white/5 space-x-3 px-3 mr-2">
                 
+                {/* Generation Type Selection */}
+                 <div className="flex items-center space-x-3 mr-2">
+                     <label className="flex items-center space-x-1.5 cursor-pointer" title="Select All">
+                        <input type="checkbox" checked={allSelected} onChange={toggleAll} className="accent-indigo-500 rounded w-3.5 h-3.5 cursor-pointer bg-slate-700 border-none" />
+                        <span className="text-xs font-bold text-slate-300">All</span>
+                     </label>
+                     <div className="w-px h-3 bg-white/10"></div>
+                     <label className="flex items-center space-x-1.5 cursor-pointer">
+                        <input type="checkbox" checked={taskSelection.full} onChange={() => toggleTask('full')} className="accent-indigo-500 rounded w-3.5 h-3.5 cursor-pointer bg-slate-700 border-none" />
+                        <span className="text-xs text-slate-400 hover:text-white">Full</span>
+                     </label>
+                     <label className="flex items-center space-x-1.5 cursor-pointer">
+                        <input type="checkbox" checked={taskSelection.model} onChange={() => toggleTask('model')} className="accent-indigo-500 rounded w-3.5 h-3.5 cursor-pointer bg-slate-700 border-none" />
+                        <span className="text-xs text-slate-400 hover:text-white">Char</span>
+                     </label>
+                     <label className="flex items-center space-x-1.5 cursor-pointer">
+                        <input type="checkbox" checked={taskSelection.background} onChange={() => toggleTask('background')} className="accent-indigo-500 rounded w-3.5 h-3.5 cursor-pointer bg-slate-700 border-none" />
+                        <span className="text-xs text-slate-400 hover:text-white">BG</span>
+                     </label>
+                     <label className="flex items-center space-x-1.5 cursor-pointer">
+                        <input type="checkbox" checked={taskSelection.backside} onChange={() => toggleTask('backside')} className="accent-indigo-500 rounded w-3.5 h-3.5 cursor-pointer bg-slate-700 border-none" />
+                        <span className="text-xs text-slate-400 hover:text-white">Op.</span>
+                     </label>
+                     <label className="flex items-center space-x-1.5 cursor-pointer">
+                        <input type="checkbox" checked={taskSelection.nude} onChange={() => toggleTask('nude')} className="accent-indigo-500 rounded w-3.5 h-3.5 cursor-pointer bg-slate-700 border-none" />
+                        <span className="text-xs text-slate-400 hover:text-white">Nude</span>
+                     </label>
+                     <label className="flex items-center space-x-1.5 cursor-pointer">
+                        <input type="checkbox" checked={taskSelection.nudeOpposite} onChange={() => toggleTask('nudeOpposite')} className="accent-indigo-500 rounded w-3.5 h-3.5 cursor-pointer bg-slate-700 border-none" />
+                        <span className="text-xs text-slate-400 hover:text-white">Nude Op.</span>
+                     </label>
+                 </div>
+
+                 <div className="w-px h-6 bg-white/10"></div>
+
                 {/* Gender Dropdown */}
                 <div className="flex items-center space-x-2">
                     <Users size={16} className="text-slate-400" />
@@ -745,129 +879,147 @@ export default function App() {
               <p className="text-xs font-medium text-slate-400">Add more images</p>
             </div>
 
-            {/* List */}
-            {inputQueue.map((item, idx) => (
-              <div key={item.id} className="flex flex-col border-b border-white/5 relative group bg-slate-900">
-                
-                {/* Image Area - Full Width */}
-                <div 
-                  className="w-full relative cursor-zoom-in group/image"
-                  onClick={() => setViewerItemId(item.id)}
-                >
-                    <img 
-                      src={item.thumbnailUrl} 
-                      alt="Thumb" 
-                      className="w-full h-auto max-h-64 object-cover"
-                    />
-
-                    {/* Bounding Box Overlay for People */}
-                    {item.detectBox && (
-                       <div 
-                         className="absolute border-2 border-indigo-400 bg-indigo-500/10 z-10 pointer-events-none"
-                         style={{
-                           top: `${item.detectBox[0] / 10}%`,
-                           left: `${item.detectBox[1] / 10}%`,
-                           height: `${(item.detectBox[2] - item.detectBox[0]) / 10}%`,
-                           width: `${(item.detectBox[3] - item.detectBox[1]) / 10}%`,
-                           boxShadow: '0 0 0 1px rgba(0,0,0,0.3), inset 0 0 10px rgba(99,102,241,0.2)'
-                         }}
-                       >
-                         <div className="absolute -top-5 left-0 bg-indigo-600 text-[9px] text-white px-1 rounded shadow-sm whitespace-nowrap">Target</div>
-                       </div>
-                    )}
-                    
-                    {/* Status Overlays */}
-                    {item.status === ProcessingStatus.PROCESSING && (
-                        <div className="absolute inset-0 bg-black/40 flex items-center justify-center backdrop-blur-sm z-20">
-                            {item.taskType === 'scan-people' ? (
-                                <ScanFace className="w-10 h-10 text-indigo-400 animate-pulse" />
-                            ) : (
-                                <RefreshCw className="w-10 h-10 text-indigo-400 animate-spin" />
-                            )}
-                        </div>
-                    )}
-                     {item.status === ProcessingStatus.SUCCESS && (
-                      <div className="absolute inset-0 bg-emerald-500/10 flex items-center justify-center z-20 pointer-events-none">
-                          <CheckCircle2 className="w-12 h-12 text-emerald-400 drop-shadow-lg" />
-                      </div>
-                    )}
-
-                    {/* Quick Delete Overlay */}
-                     <button 
-                        onClick={(e) => { e.stopPropagation(); handleDelete(item.id); }}
-                        className="absolute top-2 right-2 p-1.5 bg-black/50 hover:bg-red-500 hover:text-white rounded-full transition-all text-slate-300 opacity-0 group-hover:opacity-100 z-30"
-                        title="Delete from Queue"
-                     >
-                        <X size={14} />
-                    </button>
-                    
-                    {/* Zoom Hint */}
-                    <div className="absolute bottom-2 right-2 p-1.5 bg-black/40 text-white rounded text-xs opacity-0 group-hover/image:opacity-100 transition-opacity pointer-events-none z-20">
-                        <ZoomIn size={14} />
+            {/* List with Grouping */}
+            {(Object.entries(
+                inputQueue.reduce((groups, item) => {
+                    const groupName = item.file.name;
+                    if (!groups[groupName]) groups[groupName] = [];
+                    groups[groupName].push(item);
+                    return groups;
+                }, {} as Record<string, QueueItem[]>)
+            ) as [string, QueueItem[]][]).map(([filename, items]) => (
+                <div key={filename} className="mb-4 bg-slate-900/50 border-y border-white/5">
+                    {/* Group Header */}
+                    <div className="px-3 py-1.5 text-xs font-bold text-indigo-200 bg-black/20 uppercase tracking-wider flex items-center border-b border-white/5">
+                        <Image size={10} className="mr-1.5 opacity-70" />
+                        {filename}
                     </div>
-                </div>
+                    {/* Items */}
+                    {items.map((item, idx) => (
+                      <div key={item.id} className="flex flex-col border-b border-white/5 relative group bg-slate-900 last:border-0">
+                        
+                        {/* Image Area - Full Width */}
+                        <div 
+                          className="w-full relative cursor-zoom-in group/image"
+                          onClick={() => setViewerItemId(item.id)}
+                        >
+                            <img 
+                              src={item.thumbnailUrl} 
+                              alt="Thumb" 
+                              className="w-full h-auto max-h-64 object-cover"
+                            />
 
-                {/* Content Area - Below Image */}
-                <div className="flex flex-col p-3 bg-slate-800/20">
-                  <div className="flex justify-between items-start">
-                      <p className="text-sm font-medium text-slate-200 truncate pr-2" title={item.file.name}>{item.file.name}</p>
-                      
-                      {/* Priority Controls (Only for pending) */}
-                      {(item.status === ProcessingStatus.PENDING) && (
-                          <div className="flex space-x-0.5 bg-slate-800 rounded-md border border-white/5 p-0.5">
-                              <button onClick={() => handleReorder(item.id, 'top')} className="p-1 hover:bg-indigo-500/20 text-slate-500 hover:text-indigo-300 rounded" title="Move to Top"><ChevronsUp size={10} /></button>
-                              <button onClick={() => handleReorder(item.id, 'up')} className="p-1 hover:bg-white/10 text-slate-500 hover:text-slate-300 rounded" title="Move Up"><ChevronUp size={10} /></button>
-                              <button onClick={() => handleReorder(item.id, 'down')} className="p-1 hover:bg-white/10 text-slate-500 hover:text-slate-300 rounded" title="Move Down"><ChevronDown size={10} /></button>
-                              <button onClick={() => handleReorder(item.id, 'bottom')} className="p-1 hover:bg-indigo-500/20 text-slate-500 hover:text-indigo-300 rounded" title="Move to Bottom"><ChevronsDown size={10} /></button>
-                          </div>
-                      )}
-                  </div>
-                  
-                  <div className="flex flex-wrap gap-2 mt-2">
-                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase tracking-wide border self-start ${
-                        item.taskType === 'scan-people' ? 'bg-indigo-500/20 border-indigo-500/40 text-indigo-300' :
-                        item.taskType === 'model' ? 'bg-fuchsia-500/20 border-fuchsia-500/40 text-fuchsia-300' :
-                        'bg-slate-700 border-slate-600 text-slate-300'
-                    }`}>
-                        {getTaskLabel(item.taskType)}
-                    </span>
-                    
-                     {item.personDescription && (
-                          <div className="flex items-center space-x-1.5 bg-indigo-500/10 px-2 py-0.5 rounded border border-indigo-500/20 max-w-full">
-                             <User size={10} className="text-indigo-400 shrink-0" />
-                             <span className="text-xs text-indigo-200 italic font-medium leading-tight truncate">{item.personDescription}</span>
-                          </div>
-                      )}
-                  </div>
+                            {/* Bounding Box Overlay for People */}
+                            {item.detectBox && (
+                              <div 
+                                className="absolute border-2 border-indigo-400 bg-indigo-500/10 z-10 pointer-events-none"
+                                style={{
+                                  top: `${item.detectBox[0] / 10}%`,
+                                  left: `${item.detectBox[1] / 10}%`,
+                                  height: `${(item.detectBox[2] - item.detectBox[0]) / 10}%`,
+                                  width: `${(item.detectBox[3] - item.detectBox[1]) / 10}%`,
+                                  boxShadow: '0 0 0 1px rgba(0,0,0,0.3), inset 0 0 10px rgba(99,102,241,0.2)'
+                                }}
+                              >
+                                <div className="absolute -top-5 left-0 bg-indigo-600 text-[9px] text-white px-1 rounded shadow-sm whitespace-nowrap">Target</div>
+                              </div>
+                            )}
+                            
+                            {/* Status Overlays */}
+                            {item.status === ProcessingStatus.PROCESSING && (
+                                <div className="absolute inset-0 bg-black/40 flex items-center justify-center backdrop-blur-sm z-20">
+                                    {item.taskType === 'scan-people' ? (
+                                        <ScanFace className="w-10 h-10 text-indigo-400 animate-pulse" />
+                                    ) : (
+                                        <RefreshCw className="w-10 h-10 text-indigo-400 animate-spin" />
+                                    )}
+                                </div>
+                            )}
+                            {item.status === ProcessingStatus.SUCCESS && (
+                              <div className="absolute inset-0 bg-emerald-500/10 flex items-center justify-center z-20 pointer-events-none">
+                                  <CheckCircle2 className="w-12 h-12 text-emerald-400 drop-shadow-lg" />
+                              </div>
+                            )}
 
-                  <div className="mt-3 pt-2 border-t border-white/5 flex items-center justify-between">
-                    {item.status === ProcessingStatus.PROCESSING ? (
-                      <span className="text-xs text-amber-400 flex items-center animate-pulse">
-                        {item.taskType === 'scan-people' ? "Detecting people..." : "Generating..."}
-                      </span>
-                    ) : item.status === ProcessingStatus.SUCCESS ? (
-                       <div className="flex gap-2 w-full">
-                             <button 
-                               onClick={() => handleLocateInGallery(item.id)}
-                               className="flex-1 py-1.5 px-2 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 text-xs uppercase font-bold rounded border border-emerald-500/20 transition-colors flex items-center justify-center"
-                             >
-                               <ArrowRightCircle size={12} className="mr-1.5" /> Locate
-                             </button>
-                             <button 
-                               onClick={() => handleRetry(item.id)}
-                               className="flex-1 py-1.5 px-2 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-300 text-xs uppercase font-bold rounded border border-indigo-500/20 transition-colors"
-                             >
-                               Rerun
-                             </button>
-                       </div>
-                    ) : (
-                      <span className="text-xs text-slate-500 flex items-center">
-                         Waiting in queue...
-                      </span>
-                    )}
-                  </div>
+                            {/* Quick Delete Overlay */}
+                            <button 
+                                onClick={(e) => { e.stopPropagation(); handleDelete(item.id); }}
+                                className="absolute top-2 right-2 p-1.5 bg-black/50 hover:bg-red-500 hover:text-white rounded-full transition-all text-slate-300 opacity-0 group-hover:opacity-100 z-30"
+                                title="Delete from Queue"
+                            >
+                                <X size={14} />
+                            </button>
+                            
+                            {/* Zoom Hint */}
+                            <div className="absolute bottom-2 right-2 p-1.5 bg-black/40 text-white rounded text-xs opacity-0 group-hover/image:opacity-100 transition-opacity pointer-events-none z-20">
+                                <ZoomIn size={14} />
+                            </div>
+                        </div>
+
+                        {/* Content Area - Below Image */}
+                        <div className="flex flex-col p-3 bg-slate-800/20">
+                          <div className="flex justify-between items-start">
+                              <p className="text-sm font-medium text-slate-200 truncate pr-2" title={item.file.name}>{item.file.name}</p>
+                              
+                              {/* Priority Controls (Only for pending) */}
+                              {(item.status === ProcessingStatus.PENDING) && (
+                                  <div className="flex space-x-0.5 bg-slate-800 rounded-md border border-white/5 p-0.5">
+                                      <button onClick={() => handleReorder(item.id, 'top')} className="p-1 hover:bg-indigo-500/20 text-slate-500 hover:text-indigo-300 rounded" title="Move to Top"><ChevronsUp size={10} /></button>
+                                      <button onClick={() => handleReorder(item.id, 'up')} className="p-1 hover:bg-white/10 text-slate-500 hover:text-slate-300 rounded" title="Move Up"><ChevronUp size={10} /></button>
+                                      <button onClick={() => handleReorder(item.id, 'down')} className="p-1 hover:bg-white/10 text-slate-500 hover:text-slate-300 rounded" title="Move Down"><ChevronDown size={10} /></button>
+                                      <button onClick={() => handleReorder(item.id, 'bottom')} className="p-1 hover:bg-indigo-500/20 text-slate-500 hover:text-indigo-300 rounded" title="Move to Bottom"><ChevronsDown size={10} /></button>
+                                  </div>
+                              )}
+                          </div>
+                          
+                          <div className="flex flex-wrap gap-2 mt-2">
+                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase tracking-wide border self-start ${
+                                item.taskType === 'scan-people' ? 'bg-indigo-500/20 border-indigo-500/40 text-indigo-300' :
+                                item.taskType === 'model' ? 'bg-fuchsia-500/20 border-fuchsia-500/40 text-fuchsia-300' :
+                                item.taskType === 'nude' || item.taskType === 'nude-opposite' ? 'bg-rose-500/20 border-rose-500/40 text-rose-300' :
+                                'bg-slate-700 border-slate-600 text-slate-300'
+                            }`}>
+                                {getTaskLabel(item.taskType)}
+                            </span>
+                            
+                            {item.personDescription && (
+                                  <div className="flex items-center space-x-1.5 bg-indigo-500/10 px-2 py-0.5 rounded border border-indigo-500/20 max-w-full">
+                                    <User size={10} className="text-indigo-400 shrink-0" />
+                                    <span className="text-xs text-indigo-200 italic font-medium leading-tight truncate">{item.personDescription}</span>
+                                  </div>
+                              )}
+                          </div>
+
+                          <div className="mt-3 pt-2 border-t border-white/5 flex items-center justify-between">
+                            {item.status === ProcessingStatus.PROCESSING ? (
+                              <span className="text-xs text-amber-400 flex items-center animate-pulse">
+                                {item.taskType === 'scan-people' ? "Detecting people..." : "Generating..."}
+                              </span>
+                            ) : item.status === ProcessingStatus.SUCCESS ? (
+                              <div className="flex gap-2 w-full">
+                                    <button 
+                                      onClick={() => handleLocateInGallery(item.id)}
+                                      className="flex-1 py-1.5 px-2 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 text-xs uppercase font-bold rounded border border-emerald-500/20 transition-colors flex items-center justify-center"
+                                    >
+                                      <ArrowRightCircle size={12} className="mr-1.5" /> Locate
+                                    </button>
+                                    <button 
+                                      onClick={() => handleRetry(item.id)}
+                                      className="flex-1 py-1.5 px-2 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-300 text-xs uppercase font-bold rounded border border-indigo-500/20 transition-colors"
+                                    >
+                                      Rerun
+                                    </button>
+                              </div>
+                            ) : (
+                              <span className="text-xs text-slate-500 flex items-center">
+                                Waiting in queue...
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
                 </div>
-              </div>
             ))}
           </div>
         </div>
@@ -879,36 +1031,42 @@ export default function App() {
                 <h2 className="font-bold text-slate-100 flex items-center"><ImageIcon className="mr-2 w-4 h-4 text-emerald-400" /> Gallery</h2>
                 
                 {/* Gallery Filter */}
-                <div className="flex items-center bg-slate-800/50 rounded-lg p-1 space-x-1 border border-white/5">
+                <div className="flex items-center bg-slate-800/50 rounded-lg p-1 space-x-1 border border-white/5 overflow-x-auto max-w-lg scrollbar-hide">
                     <button 
                         onClick={() => setGalleryFilter('ALL')}
-                        className={`px-3 py-1 text-xs font-medium rounded transition-colors ${galleryFilter === 'ALL' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}
+                        className={`px-3 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap ${galleryFilter === 'ALL' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}
                     >
                         All
                     </button>
                     <button 
                         onClick={() => setGalleryFilter('full')}
-                        className={`px-3 py-1 text-xs font-medium rounded transition-colors ${galleryFilter === 'full' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}
+                        className={`px-3 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap ${galleryFilter === 'full' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}
                     >
                         Full
                     </button>
                     <button 
                         onClick={() => setGalleryFilter('model')}
-                        className={`px-3 py-1 text-xs font-medium rounded transition-colors ${galleryFilter === 'model' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}
+                        className={`px-3 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap ${galleryFilter === 'model' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}
                     >
                         Char
                     </button>
                      <button 
                         onClick={() => setGalleryFilter('background')}
-                        className={`px-3 py-1 text-xs font-medium rounded transition-colors ${galleryFilter === 'background' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}
+                        className={`px-3 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap ${galleryFilter === 'background' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}
                     >
                         BG
                     </button>
                     <button 
                         onClick={() => setGalleryFilter('backside')}
-                        className={`px-3 py-1 text-xs font-medium rounded transition-colors ${galleryFilter === 'backside' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}
+                        className={`px-3 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap ${galleryFilter === 'backside' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}
                     >
                         Op. View
+                    </button>
+                    <button 
+                        onClick={() => setGalleryFilter('nude')}
+                        className={`px-3 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap ${galleryFilter === 'nude' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}
+                    >
+                        Pose
                     </button>
                 </div>
             </div>
@@ -962,6 +1120,7 @@ export default function App() {
                         {result.type === 'model-full' && <Expand size={10} className="mr-1 text-yellow-300"/>}
                         {result.type === 'background' && <Image size={10} className="mr-1"/>}
                         {result.type === 'backside' && <Repeat size={10} className="mr-1 text-cyan-300"/>}
+                        {(result.type === 'nude' || result.type === 'nude-opposite') && <PersonStanding size={10} className="mr-1 text-rose-300"/>}
                         {getTaskLabel(item.taskType)}
                       </div>
 
@@ -974,13 +1133,7 @@ export default function App() {
 
                       {/* Hover Overlay */}
                       <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center space-y-3 pointer-events-none">
-                         <button 
-                              onClick={(e) => { e.stopPropagation(); triggerDownload(result.url, item.file.name, 'Line-', 'png'); }}
-                              className="px-4 py-2 bg-white text-slate-900 hover:bg-indigo-50 rounded-full font-bold text-xs flex items-center transform translate-y-4 group-hover:translate-y-0 transition-transform pointer-events-auto shadow-xl"
-                          >
-                              <Users size={14} className="mr-2" /> Download Image
-                          </button>
-
+                        
                         {/* Delete Button (Visible on Hover) */}
                         <button 
                             onClick={(e) => { e.stopPropagation(); handleDelete(item.id); }}
@@ -1053,7 +1206,7 @@ export default function App() {
                  {/* Image - Full Width */}
                  <div 
                    onClick={() => setViewerItemId(item.id)}
-                   className="w-full h-auto max-h-48 object-cover relative cursor-zoom-in"
+                   className="w-full h-48 relative cursor-zoom-in overflow-hidden"
                  >
                     <img src={item.thumbnailUrl} alt="Thumb" className="w-full h-full object-cover opacity-80 hover:opacity-100 transition-opacity" />
                     <div className="absolute top-1 right-1 bg-black/60 text-white text-[10px] px-1.5 py-0.5 rounded backdrop-blur-sm">
