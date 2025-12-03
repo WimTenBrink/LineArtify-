@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useLogger } from './services/loggerService';
-import { generateLineArtTask, generateAnalysisReport, detectPeople } from './services/geminiService';
+import { generateLineArtTask, detectPeople } from './services/geminiService';
 import Console from './components/Console';
 import ImageViewer from './components/ImageViewer';
 import ManualDialog from './components/ManualDialog';
@@ -41,7 +41,8 @@ export default function App() {
   const dragCounter = useRef(0);
 
   // Derived state
-  // Filter input and error queues based on the gallery filter for consistency as requested
+  // Filter input queue to show Pending, Processing, AND Success (so we don't hide finished jobs as requested)
+  // Also respect the global type filter
   const inputQueue = queue.filter(item => 
     (item.status === ProcessingStatus.PENDING || 
      item.status === ProcessingStatus.PROCESSING || 
@@ -283,7 +284,6 @@ export default function App() {
       if (index === -1) return prev;
 
       // Identify indices of all items belonging to the "Input Queue" view logic
-      // Note: We should order broadly within the queue, but specifically we want to move pending items relative to other pending items
       const pendingIndices = newQueue
         .map((item, idx) => ({ ...item, originalIndex: idx }))
         .filter(item => 
@@ -306,49 +306,15 @@ export default function App() {
 
        const targetIndex = pendingIndices[targetPendingPos];
        
-       // Move logic
-       const itemToMove = newQueue[index];
-       newQueue.splice(index, 1);
-       // We need to insert it at the position where the target was
-       // If we removed from before the target, the target index shifted down by 1
-       let insertAt = targetIndex;
-       if (index < targetIndex) insertAt--; 
+       // Robust method: Extract all pending items, reorder them array-wise, then place them back into the main queue slots.
+       const pendingItems = pendingIndices.map(i => prev[i]);
+       const movedItem = pendingItems[currentPendingPos];
+       pendingItems.splice(currentPendingPos, 1);
+       pendingItems.splice(targetPendingPos, 0, movedItem);
        
-       // Wait, direct swap is safer if adjacent
-       if (Math.abs(index - targetIndex) === 1 && (direction === 'up' || direction === 'down')) {
-          [newQueue[index], newQueue[targetIndex]] = [newQueue[targetIndex], newQueue[index]];
-       } else {
-           // For jumps
-           if (direction === 'bottom') {
-               // Insert after the last pending item
-               const lastPendingIndex = pendingIndices[pendingIndices.length - 1];
-               newQueue.splice(lastPendingIndex, 0, itemToMove); // Re-insert logic is tricky with splice shifts
-               // Let's simplify: Remove item, filter others, insert at desired position relative to filtered list? 
-               // No, we need to maintain position relative to non-pending items too.
-               // Simplest: just swap with target? No, that messes up intermediate items.
-               
-               // Robust method: Extract all pending items, reorder them array-wise, then place them back into the main queue slots.
-               const pendingItems = pendingIndices.map(i => prev[i]);
-               const movedItem = pendingItems[currentPendingPos];
-               pendingItems.splice(currentPendingPos, 1);
-               pendingItems.splice(targetPendingPos, 0, movedItem);
-               
-               // Map back
-               pendingIndices.forEach((originalIndex, i) => {
-                   newQueue[originalIndex] = pendingItems[i];
-               });
-           } else {
-                // Same logic for top/up/down
-               const pendingItems = pendingIndices.map(i => prev[i]);
-               const movedItem = pendingItems[currentPendingPos];
-               pendingItems.splice(currentPendingPos, 1);
-               pendingItems.splice(targetPendingPos, 0, movedItem);
-               
-               pendingIndices.forEach((originalIndex, i) => {
-                   newQueue[originalIndex] = pendingItems[i];
-               });
-           }
-       }
+       pendingIndices.forEach((originalIndex, i) => {
+           newQueue[originalIndex] = pendingItems[i];
+       });
        
        return newQueue;
     });
@@ -422,20 +388,28 @@ export default function App() {
             });
 
             if (newJobs.length === 0) {
-                 addLog(LogLevel.WARN, `No people detected in ${scanItem.file.name}.`);
+                 addLog(LogLevel.WARN, `No people detected in ${scanItem.file.name}. Moving to error queue.`);
+                 
+                 setQueue(prev => prev.map(i => i.id === scanItem.id ? { 
+                    ...i, 
+                    status: ProcessingStatus.ERROR, 
+                    errorMessage: "No people detected", 
+                    retryCount: i.retryCount + 1
+                 } : i));
+                 
             } else {
                  addLog(LogLevel.INFO, `Scan complete: ${people.length} people found in ${scanItem.file.name}.`);
+
+                // Remove scan task and add new tasks
+                setQueue(prev => {
+                    const filtered = prev.filter(i => i.id !== scanItem.id);
+                    // Deduplicate
+                    const existingKeys = new Set(filtered.map(i => `${i.file.name}-${i.taskType}-${i.personDescription || ''}`));
+                    const uniqueNewItems = newJobs.filter(i => !existingKeys.has(`${i.file.name}-${i.taskType}-${i.personDescription || ''}`));
+
+                    return [...filtered, ...uniqueNewItems];
+                });
             }
-
-            // Remove scan task and add new tasks
-            setQueue(prev => {
-                const filtered = prev.filter(i => i.id !== scanItem.id);
-                // Deduplicate
-                const existingKeys = new Set(filtered.map(i => `${i.file.name}-${i.taskType}-${i.personDescription || ''}`));
-                const uniqueNewItems = newJobs.filter(i => !existingKeys.has(`${i.file.name}-${i.taskType}-${i.personDescription || ''}`));
-
-                return [...filtered, ...uniqueNewItems];
-            });
 
         } catch (err: any) {
              setQueue(prev => prev.map(i => i.id === scanItem.id ? { 
@@ -502,19 +476,17 @@ export default function App() {
 
             addLog(LogLevel.INFO, `Successfully processed ${nextItem.file.name} - ${nextItem.taskType} in ${formatDuration(duration)}`);
             
-            if (result.type !== 'report') {
-                let prefix = 'Line-';
-                if (result.type === 'model') prefix = 'Line-Model-';
-                if (result.type === 'model-full') prefix = 'Line-Model-Full-';
-                if (result.type === 'background') prefix = 'Line-Background-';
-                if (result.type === 'backside') prefix = 'Line-Opposite-';
-                
-                if (nextItem.personDescription) {
-                    prefix += 'Person-';
-                }
-
-                triggerDownload(result.url, nextItem.file.name, prefix, 'png');
+            let prefix = 'Line-';
+            if (result.type === 'model') prefix = 'Line-Model-';
+            if (result.type === 'model-full') prefix = 'Line-Model-Full-';
+            if (result.type === 'background') prefix = 'Line-Background-';
+            if (result.type === 'backside') prefix = 'Line-Opposite-';
+            
+            if (nextItem.personDescription) {
+                prefix += 'Person-';
             }
+
+            triggerDownload(result.url, nextItem.file.name, prefix, 'png');
 
       } catch (err: any) {
         const errorMsg = err.message || 'Unknown error';
@@ -780,12 +752,12 @@ export default function App() {
                 {/* Image Area - Full Width */}
                 <div 
                   className="w-full relative cursor-zoom-in group/image"
+                  onClick={() => setViewerItemId(item.id)}
                 >
                     <img 
                       src={item.thumbnailUrl} 
                       alt="Thumb" 
                       className="w-full h-auto max-h-64 object-cover"
-                      onClick={() => setViewerItemId(item.id)}
                     />
 
                     {/* Bounding Box Overlay for People */}
@@ -971,28 +943,17 @@ export default function App() {
                     <div 
                         key={item.id} 
                         id={`gallery-item-${item.id}`}
-                        onClick={() => result.type !== 'report' && setViewerItemId(item.id)}
-                        className={`inline-block w-full group relative break-inside-avoid bg-white rounded-xl overflow-hidden shadow-lg hover:shadow-2xl transition-all hover:scale-[1.02] border-4 border-white mb-6 scroll-mt-20 ${result.type !== 'report' ? 'cursor-zoom-in' : ''}`}
+                        onClick={() => setViewerItemId(item.id)}
+                        className="inline-block w-full group relative break-inside-avoid bg-white rounded-xl overflow-hidden shadow-lg hover:shadow-2xl transition-all hover:scale-[1.02] border-4 border-white mb-6 scroll-mt-20 cursor-zoom-in"
                     >
-                      
-                      {result.type === 'report' ? (
-                          // Report Card
-                          <div className="w-full h-64 bg-slate-800 flex flex-col items-center justify-center p-4 text-center">
-                             <FileText size={48} className="text-indigo-400 mb-2" />
-                             <h3 className="text-white font-bold mb-1">Analysis Report</h3>
-                             <p className="text-slate-400 text-xs">Generation Failed {item.retryCount}x</p>
-                             <p className="text-slate-500 text-[10px] mt-2">Cloud Vision Analysis</p>
-                          </div>
-                      ) : (
-                          // Image Card with Max Height Constraint
-                          <div className="w-full flex justify-center bg-gray-50">
-                             <img 
-                                src={result.url} 
-                                alt="Result" 
-                                className="object-contain max-h-[40vh] w-auto max-w-full mx-auto" 
-                             />
-                          </div>
-                      )}
+                      {/* Image Card with Max Height Constraint */}
+                      <div className="w-full flex justify-center bg-gray-50">
+                          <img 
+                            src={result.url} 
+                            alt="Result" 
+                            className="object-contain max-h-[40vh] w-auto max-w-full mx-auto" 
+                          />
+                      </div>
                       
                       {/* Type Badge */}
                       <div className="absolute top-2 left-2 px-2 py-1 rounded bg-black/60 text-white text-[10px] uppercase font-bold tracking-wider backdrop-blur-sm flex items-center pointer-events-none">
@@ -1013,21 +974,12 @@ export default function App() {
 
                       {/* Hover Overlay */}
                       <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center space-y-3 pointer-events-none">
-                        {result.type === 'report' ? (
-                             <button 
-                               onClick={(e) => { e.stopPropagation(); triggerDownload(result.url, item.file.name, '', 'md'); }}
-                               className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-full font-medium text-sm flex items-center transform translate-y-4 group-hover:translate-y-0 transition-transform pointer-events-auto shadow-xl"
-                             >
-                               <FileText size={16} className="mr-2" /> Download Report
-                             </button>
-                        ) : (
-                           <button 
-                                onClick={(e) => { e.stopPropagation(); triggerDownload(result.url, item.file.name, 'Line-', 'png'); }}
-                                className="px-4 py-2 bg-white text-slate-900 hover:bg-indigo-50 rounded-full font-bold text-xs flex items-center transform translate-y-4 group-hover:translate-y-0 transition-transform pointer-events-auto shadow-xl"
-                            >
-                                <Users size={14} className="mr-2" /> Download Image
-                            </button>
-                        )}
+                         <button 
+                              onClick={(e) => { e.stopPropagation(); triggerDownload(result.url, item.file.name, 'Line-', 'png'); }}
+                              className="px-4 py-2 bg-white text-slate-900 hover:bg-indigo-50 rounded-full font-bold text-xs flex items-center transform translate-y-4 group-hover:translate-y-0 transition-transform pointer-events-auto shadow-xl"
+                          >
+                              <Users size={14} className="mr-2" /> Download Image
+                          </button>
 
                         {/* Delete Button (Visible on Hover) */}
                         <button 

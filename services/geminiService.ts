@@ -254,7 +254,7 @@ export const detectPeople = async (
     } catch (e: any) {
         addLog(LogLevel.ERROR, `Failed to detect people: ${e.message}`);
         // Fallback to text only if JSON parsing fails but we have some result, or empty if total failure
-        return [{ description: "the person" }]; 
+        return []; 
     }
 };
 
@@ -489,77 +489,5 @@ export const generateLineArtTask = async (
   } catch (error: any) {
       addLog(LogLevel.WARN, `Failed to generate ${taskName}: ${error.message}`);
       throw error;
-  }
-};
-
-export const generateAnalysisReport = async (
-  file: File,
-  apiKey: string,
-  errorHistory: string[],
-  addLog: (level: LogLevel, title: string, details?: any) => void,
-  onStatusUpdate?: (message: string) => void
-): Promise<GeneratedImage> => {
-  
-  await new Promise(resolve => setTimeout(resolve, 0));
-  const ai = new GoogleGenAI({ apiKey });
-  
-  onStatusUpdate?.("Encoding image for analysis...");
-  const base64Data = await fileToGenerativePart(file);
-  const modelName = 'gemini-2.5-flash';
-
-  const analysisPrompt = `
-    You are Google Cloud Vision, a powerful image analysis tool.
-    Analyze the provided image and generate a detailed structured report in Markdown format.
-    
-    The user has been trying to generate a line art version of this image but it failed multiple times.
-    Here is the history of errors encountered:
-    ${errorHistory.map(e => `- ${e}`).join('\n')}
-
-    Please provide a comprehensive analysis containing:
-    1.  **Image Labels**: A list of entities, objects, and concepts detected.
-    2.  **Object Detection**: List of objects and their approximate locations/prominence.
-    3.  **Safe Search Analysis**: A detailed breakdown of why this image might be triggering safety filters (Likelihood of Adult, Medical, Violence, Racy content). Be specific but professional.
-    4.  **Text Detection**: Any text found in the image.
-    5.  **Error Analysis**: Based on the image content and the error history, explain why the line art generation might be failing.
-
-    Return ONLY the Markdown text. Do not wrap in markdown code blocks. The content should be the markdown itself.
-  `;
-
-  addLog(LogLevel.INFO, `Starting fallback analysis for ${file.name}`);
-  onStatusUpdate?.("Generating Cloud Vision Analysis Report...");
-
-  try {
-    const response = await ai.models.generateContent({
-      model: modelName,
-      contents: {
-        parts: [
-          { inlineData: { mimeType: file.type, data: base64Data } },
-          { text: analysisPrompt }
-        ]
-      },
-      config: {
-        safetySettings: [
-          { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
-          { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
-          { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' },
-          { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' }
-        ]
-      }
-    });
-
-    addLog(LogLevel.GEMINI_RESPONSE, `Analysis Report Response`, sanitizeForLog(response));
-    const text = response.text || "No analysis generated.";
-    
-    // Create Markdown file
-    const blob = new Blob([text], { type: 'text/markdown' });
-    const url = URL.createObjectURL(blob);
-    
-    onStatusUpdate?.("Report generated.");
-
-    return { type: 'report', url: url };
-
-  } catch (error: any) {
-    addLog(LogLevel.ERROR, `Analysis failed for ${file.name}: ${error.message}`);
-    throw error;
   }
 };

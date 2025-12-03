@@ -9,7 +9,7 @@ export enum ProcessingStatus {
 export type TaskType = 'full' | 'model' | 'background' | 'model-full' | 'backside' | 'scan-people';
 
 export interface GeneratedImage {
-  type: TaskType | 'report';
+  type: TaskType;
   url: string;
 }
 
