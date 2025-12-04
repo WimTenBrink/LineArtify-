@@ -79,6 +79,38 @@ export const TASK_DEFINITIONS: Record<TaskType, TaskDefinition> = {
       - Return ONLY the image.
     `
   },
+  'full-nude': {
+    id: 'full-nude',
+    label: 'Full Scene (Nude)',
+    description: 'Full scene line art with all characters as nude anatomical figures.',
+    category: 'Scene',
+    defaultEnabled: true,
+    prompt: ({ detailLevel, gender }) => `
+      You are an expert technical illustrator creating a high-fidelity line art reproduction.
+      Task: Convert the provided image into a high-detail line art drawing of the FULL SCENE, but strip all characters of clothing.
+
+      CRITICAL REQUIREMENTS:
+      - SCOPE: Draw the ENTIRE image (Background + Characters).
+      - CLOTHING REMOVAL: All human subjects must be depicted as NEUTRAL ANATOMICAL FIGURES (Nude/Mannequin style). Remove all clothes.
+      - SAFETY/MODESTY: Artistic anatomy study. DO NOT draw explicit genitalia. Use "Barbie/Ken doll" smooth surfaces. Keep the naughty bits hidden.
+      - RECONSTRUCTION: If clothes were hiding body parts, or if the image is cropped, you MUST INVENT the anatomical structure naturally.
+      - POSE: Preserve exact poses and interactions.
+
+      Context:
+      - ${allAgesInstruction}
+      - ${getGenderInstruction(gender)}
+      - ${getDetailInstruction(detailLevel)}
+      - ${cyberneticInstruction}
+      - ${bodyTypeInstruction}
+
+      Technical Requirements:
+      - ${orientationInstruction}
+      - Output: PNG image with an Alpha Channel (Transparency).
+      - ${styleInstruction}
+      - Background: MUST be transparent.
+      - Return ONLY the image.
+    `
+  },
   'background': {
     id: 'background',
     label: 'Background Only',

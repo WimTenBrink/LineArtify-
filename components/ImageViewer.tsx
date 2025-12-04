@@ -1,33 +1,42 @@
 
-
 import React, { useState, useRef, useEffect } from 'react';
-import { X, ZoomIn, ZoomOut, Maximize, ChevronLeft, ChevronRight } from 'lucide-react';
+import { X, ZoomIn, ZoomOut, Maximize, ChevronLeft, ChevronRight, Eye, EyeOff, Repeat } from 'lucide-react';
 import { QueueItem } from '../types';
 
 interface ImageViewerProps {
   item: QueueItem;
   onClose: () => void;
+  onRepeat?: () => void;
   onNext?: () => void;
   onPrev?: () => void;
   hasNext: boolean;
   hasPrev: boolean;
 }
 
-const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext, onPrev, hasNext, hasPrev }) => {
+const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onRepeat, onNext, onPrev, hasNext, hasPrev }) => {
   const [scale, setScale] = useState(1);
   const [position, setPosition] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+  const [showOriginal, setShowOriginal] = useState(false);
+  
   const imgRef = useRef<HTMLImageElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Determine which URL to show (Result if success, Thumbnail if pending/processing/error)
-  const displayUrl = item.result?.url || item.thumbnailUrl;
+  // Determine which URL to show
+  // If showOriginal is true, show thumbnail (source).
+  // If result exists, show result. Else show thumbnail (source).
+  const resultUrl = item.result?.url;
+  const sourceUrl = item.thumbnailUrl;
+  
+  const displayUrl = showOriginal ? sourceUrl : (resultUrl || sourceUrl);
+  const isComparing = showOriginal;
 
-  // Reset zoom when image changes
+  // Reset zoom/view when image changes
   useEffect(() => {
     setScale(1);
     setPosition({ x: 0, y: 0 });
+    setShowOriginal(false);
   }, [item.id]);
 
   const handleWheel = (e: React.WheelEvent) => {
@@ -67,6 +76,7 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext, onPrev
     if (e.key === 'ArrowRight' && hasNext && onNext) onNext();
     if (e.key === 'ArrowLeft' && hasPrev && onPrev) onPrev();
     if (e.key === 'Escape') onClose();
+    if (e.key === ' ') setShowOriginal(prev => !prev); // Space to toggle
   };
 
   useEffect(() => {
@@ -77,14 +87,18 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext, onPrev
   if (!displayUrl) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-md">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/95 backdrop-blur-md animate-in fade-in duration-200">
       <div className="relative w-[95vw] h-[95vh] bg-[#181825] rounded-xl overflow-hidden shadow-2xl border border-slate-700 flex flex-col">
         
         {/* Header Config Info */}
         <div className="absolute top-4 left-4 z-20 pointer-events-none">
-             <div className="bg-black/60 backdrop-blur text-white px-4 py-2 rounded-lg border border-white/10 shadow-lg">
-                <h3 className="font-bold text-sm">{item.file.name}</h3>
-                <div className="flex items-center space-x-2 mt-1">
+             <div className="bg-black/60 backdrop-blur text-white px-4 py-2 rounded-lg border border-white/10 shadow-lg flex flex-col gap-1">
+                <div className="flex items-center gap-2">
+                    <h3 className="font-bold text-sm text-slate-200">{item.file.name}</h3>
+                    {isComparing && <span className="text-[10px] bg-amber-500 text-black px-1.5 rounded font-bold uppercase">Original</span>}
+                    {!isComparing && item.result && <span className="text-[10px] bg-emerald-500 text-black px-1.5 rounded font-bold uppercase">Result</span>}
+                </div>
+                <div className="flex items-center space-x-2">
                     <span className="text-xs text-indigo-300 font-mono uppercase bg-indigo-500/20 px-1.5 py-0.5 rounded">
                         {item.taskType}
                     </span>
@@ -93,31 +107,48 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext, onPrev
                              - {item.personDescription}
                         </span>
                     )}
-                    {!item.result && (
-                         <span className="text-xs text-amber-300 font-mono uppercase bg-amber-500/20 px-1.5 py-0.5 rounded">
-                            Source Image
-                        </span>
-                    )}
                 </div>
              </div>
         </div>
 
-        {/* Toolbar */}
-        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-20 flex items-center space-x-2 bg-slate-800/80 backdrop-blur p-2 rounded-full border border-white/10 shadow-lg">
-          <button onClick={zoomOut} className="p-2 hover:bg-white/10 rounded-full text-white" title="Zoom Out"><ZoomOut size={20} /></button>
-          <span className="text-xs font-mono text-slate-300 w-12 text-center">{Math.round(scale * 100)}%</span>
-          <button onClick={zoomIn} className="p-2 hover:bg-white/10 rounded-full text-white" title="Zoom In"><ZoomIn size={20} /></button>
-          <div className="w-px h-4 bg-white/20 mx-2"></div>
-          <button onClick={reset} className="p-2 hover:bg-white/10 rounded-full text-white" title="Reset View"><Maximize size={20} /></button>
+        {/* Top Right Controls */}
+        <div className="absolute top-4 right-4 z-30 flex items-center space-x-3">
+             {onRepeat && (
+                <button 
+                  onClick={onRepeat}
+                  className="p-2 bg-slate-800/80 hover:bg-indigo-500 rounded-full text-white transition-colors border border-white/10 backdrop-blur"
+                  title="Repeat this job"
+                >
+                  <Repeat size={24} />
+                </button>
+             )}
+             <button 
+              onClick={onClose}
+              className="p-2 bg-slate-800/80 hover:bg-red-500/80 rounded-full text-white transition-colors border border-white/10 backdrop-blur"
+            >
+              <X size={24} />
+            </button>
         </div>
 
-        {/* Close Button */}
-        <button 
-          onClick={onClose}
-          className="absolute top-4 right-4 z-30 p-2 bg-slate-800/80 hover:bg-red-500/80 rounded-full text-white transition-colors border border-white/10"
-        >
-          <X size={24} />
-        </button>
+        {/* Toolbar */}
+        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-20 flex items-center space-x-2 bg-slate-800/90 backdrop-blur p-2 rounded-full border border-white/10 shadow-xl">
+          <button onClick={zoomOut} className="p-2 hover:bg-white/10 rounded-full text-white transition-colors" title="Zoom Out"><ZoomOut size={20} /></button>
+          <span className="text-xs font-mono text-slate-300 w-12 text-center select-none">{Math.round(scale * 100)}%</span>
+          <button onClick={zoomIn} className="p-2 hover:bg-white/10 rounded-full text-white transition-colors" title="Zoom In"><ZoomIn size={20} /></button>
+          <div className="w-px h-4 bg-white/20 mx-2"></div>
+          <button onClick={reset} className="p-2 hover:bg-white/10 rounded-full text-white transition-colors" title="Reset View"><Maximize size={20} /></button>
+          <div className="w-px h-4 bg-white/20 mx-2"></div>
+          
+          {/* Toggle Original/Result */}
+          <button 
+            onClick={() => setShowOriginal(!showOriginal)} 
+            className={`p-2 rounded-full transition-colors ${showOriginal ? 'bg-amber-500/20 text-amber-400' : 'hover:bg-white/10 text-white'}`} 
+            title={showOriginal ? "Showing Original (Space)" : "Showing Result (Space)"}
+            disabled={!item.result} // Disable if no result to compare
+          >
+            {showOriginal ? <EyeOff size={20} /> : <Eye size={20} />}
+          </button>
+        </div>
 
         {/* Prev/Next Navigation */}
         {hasPrev && (
@@ -174,3 +205,4 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext, onPrev
 };
 
 export default ImageViewer;
+    

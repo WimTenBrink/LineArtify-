@@ -1,0 +1,115 @@
+
+# Project Specification: LineArtify Gemini Edition
+# Description: A React-based web application for automated line art extraction, character analysis, and technical illustration using Google Gemini API.
+
+## 1. Technology Stack
+- **Framework**: React 19 (Functional Components, Hooks)
+- **Build Tool**: Vite (implied by file structure)
+- **Language**: TypeScript
+- **Styling**: Tailwind CSS (via CDN or build process), Lucide React (Icons)
+- **AI SDK**: @google/genai (v1.30.0+)
+- **Storage**: IndexedDB (Native Browser API)
+
+## 2. Core Architecture
+The application is a client-side "State Machine" that manages a queue of image processing jobs.
+- **Input**: User uploads images.
+- **Process**: 
+  1. Images are "Scanned" by Gemini 2.5 Flash to detect people/bounding boxes.
+  2. Based on detection, specific "Tasks" are spawned (Face, Nude, Background, etc.).
+  3. A "Processor Loop" runs periodically to pick pending jobs and send them to the API.
+- **Output**: Processed images are Auto-Cropped (client-side canvas), displayed in a Gallery, and Auto-Downloaded.
+- **Persistence**: State is saved to IndexedDB to survive page reloads.
+
+## 3. File Structure & Responsibilities
+
+### `index.html`
+- Entry point.
+- Imports Tailwind CSS via CDN.
+- Defines Custom Scrollbar styles.
+- Defines Keyframes for `animate-scan` (scanning overlay).
+- Sets up Import Map for React/ReactDOM/GenAI.
+
+### `types.ts`
+- Defines core interfaces:
+  - `TaskType`: Union of all possible jobs ('full', 'background', 'scan-people', 'face', 'face-left', 'neutral', etc.).
+  - `ProcessingStatus`: Enum (PENDING, PROCESSING, SUCCESS, ERROR, ENDED).
+  - `QueueItem`: The atomic unit of work. Contains `sourceId`, `file`, `status`, `retryCount`, `result`.
+  - `SourceImage`: The original upload. Contains `options` snapshot.
+  - `AppOptions`: Global configuration state.
+
+### `services/taskDefinitions.ts`
+- The "Prompt Engineering Hub".
+- Exports `TASK_DEFINITIONS`: A record mapping `TaskType` to an object containing:
+  - `label`, `description`, `category`.
+  - `prompt`: A function accepting params (gender, detailLevel) and returning the string prompt for Gemini.
+- **Key Prompts**:
+  - `scan-people`: Returns JSON list of bounding boxes.
+  - `background`: In-painting removal of people.
+  - `nude`/`neutral-nude`: Anatomical study (Safe, Mannequin style).
+  - `face`/`face-left`: Strict view enforcement.
+
+### `services/geminiService.ts`
+- Handles all API communication.
+- `detectPeople()`: Calls Gemini 2.5 Flash with JSON schema to find subjects.
+- `generateLineArtTask()`: Calls Gemini 2.5 Flash (or 3 Pro for Upscale) with image+text prompt.
+- `cropToContent()`: Client-side canvas pixel manipulation to remove whitespace.
+- `fileToGenerativePart()`: Base64 encoding helper.
+
+### `services/dbService.ts`
+- Manages IndexedDB `lineartify_db`.
+- `saveWorkspace()`: Serializes State. Converts Blob URLs to binary Blobs for storage.
+- `loadWorkspace()`: Deserializes State. Recreates Blob URLs from binary Blobs.
+
+### `services/loggerService.tsx`
+- React Context for system logs.
+- Stores logs in memory and exposes `Console` component access.
+
+### `components/OptionsDialog.tsx`
+- Modal for configuration.
+- Tabs: Types (Checkboxes), Gender (Radio), Quality (Slider).
+- Features: "Restore Defaults", "Save Config (.klc)", "Load Config".
+
+### `components/ManualDialog.tsx`
+- Displays the User Manual.
+- Renders Markdown content.
+- Allows downloading manual as `.md`.
+
+### `components/ImageViewer.tsx`
+- Immersive modal for viewing results.
+- Features: Pan/Zoom (Canvas transformation), Next/Prev navigation, Repeat Job, Toggle Original/Result.
+
+### `components/Console.tsx`
+- Overlay for viewing system logs (Requests, Responses, Errors).
+
+### `App.tsx` (The Brain)
+- **State**: `uploads`, `queue`, `options`, `activeQueueView`.
+- **Effects**:
+  - `useEffect` (Init): Load DB.
+  - `useEffect` (Persistence): Save DB on change (debounced).
+  - `useEffect` (Processor): The main loop running every 1000ms.
+- **Logic**:
+  - **Concurrency**: Checks `MAX_CONCURRENT_REQUESTS`.
+  - **One-Job-Per-Queue**: Ensures only 1 job of type 'face' runs at a time, 1 of 'background', etc.
+  - **Auto-Download**: Triggers anchor tag click on success.
+- **UI**:
+  - **Header**: Stats, Global Controls.
+  - **Icon Bar**: Horizontal scroll row of icon-only buttons for Queue Views.
+  - **Sidebar**: Upload list (with Scanning overlay) and Queue Item list.
+  - **Gallery**: Grid of results. Sorting/Filtering logic.
+
+## 4. Key Implementation Details to Recreate
+
+1.  **Scanning Animation**: In `App.tsx`, when rendering the Upload list, check if any associated job is `scan-people` & `PROCESSING`. If so, render the CSS `animate-scan` div.
+2.  **Auto-Crop**: Implement `cropToContent` in `geminiService` using a non-blocking `setTimeout` loop to process pixel rows without freezing the UI.
+3.  **Blob Storage**: In `dbService`, you cannot store `blob:` URLs. You must `fetch(url).blob()` to store the data, and `URL.createObjectURL(blob)` when loading.
+4.  **Prompt Safety**: Ensure prompts for "Nude" tasks explicitly state "Mannequin style", "No genitalia", "Artistic anatomy study" to avoid safety blocks.
+5.  **Queue Filtering**: The Gallery view should filter based on `selectedSourceIds` (set of IDs) and `isGalleryFilteredByQueue` (boolean).
+
+## 5. UI/UX Style Guide
+- **Theme**: Dark Mode (Slate/Zinc palette).
+- **Colors**:
+  - Primary: Indigo (`indigo-500`/`indigo-600`)
+  - Success: Emerald (`emerald-500`)
+  - Error: Red (`red-500`)
+  - Background: Deep Blue/Black (`#0f0f16`, `#181825`)
+- **Components**: Rounded corners (`rounded-xl`), thin borders (`border-white/5`), Glassmorphism (`backdrop-blur`).

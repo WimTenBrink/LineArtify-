@@ -1,8 +1,8 @@
 
 
 import React, { useState, useRef } from 'react';
-import { X, Layers, User, Settings, RotateCcw, Save, Upload, Download } from 'lucide-react';
-import { AppOptions, TaskType } from '../types';
+import { X, Layers, User, Settings, RotateCcw, Save, Upload, Download, ArrowUpCircle } from 'lucide-react';
+import { AppOptions, TaskType, PriorityLevel } from '../types';
 import { TASK_DEFINITIONS } from '../services/taskDefinitions';
 
 interface OptionsDialogProps {
@@ -25,9 +25,17 @@ const OptionsDialog: React.FC<OptionsDialogProps> = ({ isOpen, onClose, options,
     }));
   };
 
+  const setTaskPriority = (key: keyof AppOptions['taskPriorities'], priority: PriorityLevel) => {
+    setOptions(prev => ({
+      ...prev,
+      taskPriorities: { ...prev.taskPriorities, [key]: priority }
+    }));
+  };
+
   const DEFAULT_OPTIONS: AppOptions = {
     taskTypes: {
       full: true,
+      fullNude: true, // New
       background: true,
       allPeople: true,
       allPeopleNude: true,
@@ -42,6 +50,24 @@ const OptionsDialog: React.FC<OptionsDialogProps> = ({ isOpen, onClose, options,
       neutral: true,
       neutralNude: true,
       upscale: false
+    },
+    taskPriorities: {
+        full: 'Low',
+        fullNude: 'Low', // New
+        background: 'Low',
+        allPeople: 'Normal',
+        allPeopleNude: 'Normal',
+        model: 'Very High',
+        backside: 'Normal',
+        nude: 'Very High',
+        nudeOpposite: 'Normal',
+        modelFull: 'Normal',
+        face: 'Very Low',
+        faceLeft: 'Very Low',
+        faceRight: 'Very Low',
+        neutral: 'High',
+        neutralNude: 'Normal',
+        upscale: 'Normal'
     },
     gender: 'As-is',
     detailLevel: 'Medium'
@@ -74,6 +100,10 @@ const OptionsDialog: React.FC<OptionsDialogProps> = ({ isOpen, onClose, options,
         const result = ev.target?.result as string;
         const parsed = JSON.parse(result);
         if (parsed && parsed.taskTypes) {
+           // Ensure taskPriorities exists for backward compatibility
+           if (!parsed.taskPriorities) {
+             parsed.taskPriorities = DEFAULT_OPTIONS.taskPriorities;
+           }
            setOptions(parsed);
            alert('Configuration loaded successfully.');
         } else {
@@ -98,12 +128,11 @@ const OptionsDialog: React.FC<OptionsDialogProps> = ({ isOpen, onClose, options,
   // Group definitions by category
   const sceneTasks = Object.values(TASK_DEFINITIONS).filter(t => t.category === 'Scene' || t.category === 'Group');
   const personTasks = Object.values(TASK_DEFINITIONS).filter(t => t.category === 'Person');
-  const utilityTasks = Object.values(TASK_DEFINITIONS).filter(t => t.category === 'Utility' && t.id !== 'scan-people');
-
-  // Helper to map TaskDef ID to Options Key (converting kebab-case to camelCase for legacy options keys if needed)
-  // Or ensuring keys match. In AppOptions, we have: full, background, allPeople, allPeopleNude, model, backside, nude, nudeOpposite, modelFull, face, upscale
+  
+  // Helper to map TaskDef ID to Options Key
   const taskKeyMap: Record<string, keyof AppOptions['taskTypes']> = {
       'full': 'full',
+      'full-nude': 'fullNude',
       'background': 'background',
       'all-people': 'allPeople',
       'all-people-nude': 'allPeopleNude',
@@ -120,15 +149,43 @@ const OptionsDialog: React.FC<OptionsDialogProps> = ({ isOpen, onClose, options,
       'upscale': 'upscale'
   };
 
+  const PrioritySelector = ({ taskKey }: { taskKey: keyof AppOptions['taskPriorities'] }) => {
+      const p = options.taskPriorities[taskKey];
+      const colors = {
+          'Very Low': 'text-slate-500',
+          'Low': 'text-slate-400',
+          'Normal': 'text-indigo-400',
+          'High': 'text-emerald-400',
+          'Very High': 'text-amber-400 font-bold'
+      };
+
+      return (
+          <div className="flex items-center space-x-1 bg-slate-900/80 rounded px-1.5 py-0.5 border border-white/5 ml-auto" onClick={(e) => e.stopPropagation()}>
+              <span className="text-[9px] uppercase text-slate-500 font-bold tracking-wider">Priority</span>
+              <select 
+                value={p} 
+                onChange={(e) => setTaskPriority(taskKey, e.target.value as PriorityLevel)}
+                className={`bg-transparent text-[10px] outline-none cursor-pointer ${colors[p]} font-mono`}
+              >
+                  <option value="Very Low">Very Low</option>
+                  <option value="Low">Low</option>
+                  <option value="Normal">Normal</option>
+                  <option value="High">High</option>
+                  <option value="Very High">Very High</option>
+              </select>
+          </div>
+      );
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm">
       <div className="bg-[#1e1e2e] w-[95vw] h-[95vh] rounded-xl shadow-2xl flex flex-col border border-slate-700 overflow-hidden">
         
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 bg-slate-800 border-b border-slate-700 shrink-0">
-          <h2 className="text-xl font-bold text-white">Configuration</h2>
+        <div className="flex items-center justify-between px-4 py-3 bg-slate-800 border-b border-slate-700 shrink-0">
+          <h2 className="text-lg font-bold text-white">Configuration</h2>
           <button onClick={onClose} className="p-1 hover:bg-white/10 rounded text-slate-400 hover:text-white">
-            <X size={20} />
+            <X size={18} />
           </button>
         </div>
 
@@ -136,78 +193,99 @@ const OptionsDialog: React.FC<OptionsDialogProps> = ({ isOpen, onClose, options,
         <div className="flex border-b border-slate-700 bg-slate-900/50 shrink-0">
            <button 
              onClick={() => setActiveTab(0)} 
-             className={`flex-1 py-4 text-sm font-medium flex items-center justify-center gap-2 ${activeTab === 0 ? 'text-indigo-400 border-b-2 border-indigo-500 bg-slate-800' : 'text-slate-400 hover:bg-slate-800/50'}`}
+             className={`flex-1 py-3 text-xs font-bold uppercase tracking-wide flex items-center justify-center gap-2 ${activeTab === 0 ? 'text-indigo-400 border-b-2 border-indigo-500 bg-slate-800' : 'text-slate-400 hover:bg-slate-800/50'}`}
            >
-             <Layers size={16} /> Types
+             <Layers size={14} /> Types
            </button>
            <button 
              onClick={() => setActiveTab(1)} 
-             className={`flex-1 py-4 text-sm font-medium flex items-center justify-center gap-2 ${activeTab === 1 ? 'text-indigo-400 border-b-2 border-indigo-500 bg-slate-800' : 'text-slate-400 hover:bg-slate-800/50'}`}
+             className={`flex-1 py-3 text-xs font-bold uppercase tracking-wide flex items-center justify-center gap-2 ${activeTab === 1 ? 'text-indigo-400 border-b-2 border-indigo-500 bg-slate-800' : 'text-slate-400 hover:bg-slate-800/50'}`}
            >
-             <User size={16} /> Gender
+             <User size={14} /> Gender
            </button>
            <button 
              onClick={() => setActiveTab(2)} 
-             className={`flex-1 py-4 text-sm font-medium flex items-center justify-center gap-2 ${activeTab === 2 ? 'text-indigo-400 border-b-2 border-indigo-500 bg-slate-800' : 'text-slate-400 hover:bg-slate-800/50'}`}
+             className={`flex-1 py-3 text-xs font-bold uppercase tracking-wide flex items-center justify-center gap-2 ${activeTab === 2 ? 'text-indigo-400 border-b-2 border-indigo-500 bg-slate-800' : 'text-slate-400 hover:bg-slate-800/50'}`}
            >
-             <Settings size={16} /> Quality
+             <Settings size={14} /> Quality
            </button>
         </div>
 
         {/* Content */}
-        <div className="flex-1 p-8 overflow-y-auto bg-[#13131f]">
+        <div className="flex-1 p-4 overflow-y-auto bg-[#13131f] custom-scrollbar">
           
           {/* Page 1: Types */}
           {activeTab === 0 && (
-            <div className="max-w-4xl mx-auto space-y-8">
+            <div className="space-y-6">
               <section>
-                <h3 className="text-sm font-bold text-indigo-400 uppercase tracking-widest mb-6 border-b border-white/10 pb-2">Scene & Group Generation</h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <h3 className="text-xs font-bold text-indigo-400 uppercase tracking-widest mb-3 border-b border-white/10 pb-1">Scene & Group Generation</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                   {sceneTasks.map(task => {
                       const key = taskKeyMap[task.id];
                       if (!key) return null;
                       return (
-                        <label key={task.id} className="flex items-start p-4 bg-slate-800/50 rounded-xl cursor-pointer hover:bg-slate-800 border border-white/5 transition-colors">
-                            <input type="checkbox" checked={options.taskTypes[key]} onChange={() => toggleTask(key)} className="mt-1 accent-indigo-500 w-5 h-5" />
-                            <div className="ml-4">
-                            <span className="block font-medium text-white text-lg">{task.label}</span>
-                            <span className="block text-sm text-slate-400 mt-1">{task.description}</span>
+                        <div key={task.id} className="flex flex-col p-2 bg-slate-800/50 rounded-lg border border-white/5 transition-colors hover:bg-slate-800">
+                             <div className="flex items-start mb-2">
+                                <label className="flex items-start cursor-pointer flex-1">
+                                    <input type="checkbox" checked={options.taskTypes[key]} onChange={() => toggleTask(key)} className="mt-1 accent-indigo-500 w-4 h-4 shrink-0" />
+                                    <div className="ml-3">
+                                        <span className="block font-bold text-white text-sm">{task.label}</span>
+                                        <span className="block text-[10px] text-slate-400 leading-tight">{task.description}</span>
+                                    </div>
+                                </label>
                             </div>
-                        </label>
+                            <div className="mt-auto pt-1">
+                                <PrioritySelector taskKey={key} />
+                            </div>
+                        </div>
                       );
                   })}
                 </div>
               </section>
 
               <section>
-                 <h3 className="text-sm font-bold text-indigo-400 uppercase tracking-widest mb-6 border-b border-white/10 pb-2">Person Extraction Tasks</h3>
-                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                 <h3 className="text-xs font-bold text-indigo-400 uppercase tracking-widest mb-3 border-b border-white/10 pb-1">Person Extraction Tasks</h3>
+                 <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
                     {personTasks.map(task => {
                         const key = taskKeyMap[task.id];
                         if (!key) return null;
                         return (
-                            <label key={task.id} className="flex items-start p-4 bg-slate-800/50 rounded-xl cursor-pointer hover:bg-slate-800 border border-white/5 transition-colors">
-                                <input type="checkbox" checked={options.taskTypes[key]} onChange={() => toggleTask(key)} className="mt-1 accent-indigo-500 w-5 h-5" />
-                                <div className="ml-4">
-                                    <span className="block font-medium text-white">{task.label}</span>
-                                    <span className="block text-xs text-slate-400 mt-1">{task.description}</span>
+                            <div key={task.id} className="flex flex-col p-2 bg-slate-800/50 rounded-lg border border-white/5 transition-colors hover:bg-slate-800">
+                                <div className="flex items-start mb-2">
+                                    <label className="flex items-start cursor-pointer flex-1">
+                                        <input type="checkbox" checked={options.taskTypes[key]} onChange={() => toggleTask(key)} className="mt-1 accent-indigo-500 w-4 h-4 shrink-0" />
+                                        <div className="ml-3">
+                                            <span className="block font-bold text-white text-sm">{task.label}</span>
+                                            <span className="block text-[10px] text-slate-400 leading-tight">{task.description}</span>
+                                        </div>
+                                    </label>
                                 </div>
-                            </label>
+                                <div className="mt-auto pt-1">
+                                    <PrioritySelector taskKey={key} />
+                                </div>
+                            </div>
                         );
                     })}
                  </div>
               </section>
 
               <section>
-                 <h3 className="text-sm font-bold text-indigo-400 uppercase tracking-widest mb-6 border-b border-white/10 pb-2">Utility</h3>
-                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <label className="flex items-start p-4 bg-slate-800/50 rounded-xl cursor-pointer hover:bg-slate-800 border border-white/5 transition-colors">
-                        <input type="checkbox" checked={options.taskTypes.upscale} onChange={() => toggleTask('upscale')} className="mt-1 accent-indigo-500 w-5 h-5" />
-                        <div className="ml-4">
-                            <span className="block font-medium text-white">Upscale 4K</span>
-                            <span className="block text-xs text-slate-400 mt-1">Automatically upscale all generated images to 4K resolution using Gemini 3 Pro.</span>
+                 <h3 className="text-xs font-bold text-indigo-400 uppercase tracking-widest mb-3 border-b border-white/10 pb-1">Utility</h3>
+                 <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                    <div className="flex flex-col p-2 bg-slate-800/50 rounded-lg border border-white/5 transition-colors hover:bg-slate-800">
+                        <div className="flex items-start mb-2">
+                            <label className="flex items-start cursor-pointer flex-1">
+                                <input type="checkbox" checked={options.taskTypes.upscale} onChange={() => toggleTask('upscale')} className="mt-1 accent-indigo-500 w-4 h-4 shrink-0" />
+                                <div className="ml-3">
+                                    <span className="block font-bold text-white text-sm">Upscale 4K</span>
+                                    <span className="block text-[10px] text-slate-400 leading-tight">Automatically upscale generated images to 4K resolution using Gemini 3 Pro.</span>
+                                </div>
+                            </label>
                         </div>
-                    </label>
+                         <div className="mt-auto pt-1">
+                            <PrioritySelector taskKey="upscale" />
+                        </div>
+                    </div>
                  </div>
               </section>
             </div>
@@ -215,22 +293,22 @@ const OptionsDialog: React.FC<OptionsDialogProps> = ({ isOpen, onClose, options,
 
           {/* Page 2: Gender */}
           {activeTab === 1 && (
-            <div className="max-w-4xl mx-auto space-y-6">
-              <h3 className="text-sm font-bold text-indigo-400 uppercase tracking-widest mb-6 border-b border-white/10 pb-2">Target Gender Adjustment</h3>
-              <p className="text-lg text-slate-300 mb-8">Force the AI to interpret ambiguous figures as a specific gender, or leave as "As-is" for natural interpretation based on the image.</p>
+            <div className="space-y-4">
+              <h3 className="text-xs font-bold text-indigo-400 uppercase tracking-widest mb-3 border-b border-white/10 pb-1">Target Gender Adjustment</h3>
+              <p className="text-sm text-slate-300 mb-4">Force the AI to interpret ambiguous figures as a specific gender, or leave as "As-is" for natural interpretation.</p>
               
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
                  {genderOptions.map((g) => (
-                    <label key={g} className={`flex items-center space-x-4 p-6 rounded-xl border cursor-pointer transition-all ${options.gender === g ? 'bg-indigo-600/20 border-indigo-500' : 'bg-slate-800/50 border-white/5 hover:bg-slate-800'}`}>
+                    <label key={g} className={`flex items-center space-x-3 p-3 rounded-lg border cursor-pointer transition-all ${options.gender === g ? 'bg-indigo-600/20 border-indigo-500' : 'bg-slate-800/50 border-white/5 hover:bg-slate-800'}`}>
                         <input 
                             type="radio" 
                             name="gender" 
                             value={g} 
                             checked={options.gender === g}
                             onChange={(e) => setOptions(prev => ({...prev, gender: e.target.value}))}
-                            className="accent-indigo-500 w-6 h-6"
+                            className="accent-indigo-500 w-4 h-4"
                         />
-                        <span className="text-lg font-medium text-slate-300">{g}</span>
+                        <span className="text-sm font-medium text-slate-300">{g}</span>
                     </label>
                  ))}
               </div>
@@ -239,11 +317,11 @@ const OptionsDialog: React.FC<OptionsDialogProps> = ({ isOpen, onClose, options,
 
           {/* Page 3: Quality */}
           {activeTab === 2 && (
-             <div className="max-w-4xl mx-auto space-y-8">
-               <h3 className="text-sm font-bold text-indigo-400 uppercase tracking-widest mb-6 border-b border-white/10 pb-2">Detail & Style Quality</h3>
+             <div className="space-y-6">
+               <h3 className="text-xs font-bold text-indigo-400 uppercase tracking-widest mb-3 border-b border-white/10 pb-1">Detail & Style Quality</h3>
                
-               <div className="bg-slate-800/50 p-10 rounded-2xl border border-white/5">
-                  <div className="flex justify-between text-xs font-bold text-slate-500 uppercase tracking-widest mb-8">
+               <div className="bg-slate-800/50 p-6 rounded-xl border border-white/5">
+                  <div className="flex justify-between text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-4">
                       <span>Very Low</span>
                       <span>Low</span>
                       <span>Medium</span>
@@ -260,11 +338,11 @@ const OptionsDialog: React.FC<OptionsDialogProps> = ({ isOpen, onClose, options,
                        const val = parseInt(e.target.value);
                        setOptions(prev => ({...prev, detailLevel: detailLevels[val]}));
                     }}
-                    className="w-full h-3 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+                    className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-indigo-500"
                   />
-                  <div className="mt-10 text-center">
-                     <span className="text-indigo-400 font-bold text-3xl">{options.detailLevel} Detail</span>
-                     <p className="text-lg text-slate-300 mt-4 max-w-2xl mx-auto">
+                  <div className="mt-6 text-center">
+                     <span className="text-indigo-400 font-bold text-xl">{options.detailLevel} Detail</span>
+                     <p className="text-sm text-slate-300 mt-2 max-w-lg mx-auto leading-relaxed">
                         {options.detailLevel === 'Very Low' && "Abstract & Minimalist. Ultra-simplified lines. Best for conceptual icons."}
                         {options.detailLevel === 'Low' && "Simplified lines. Best for icons and quick sketches. Focus on silhouette."}
                         {options.detailLevel === 'Medium' && "Balanced detail. Standard professional illustration style. Good for general use."}
@@ -278,22 +356,22 @@ const OptionsDialog: React.FC<OptionsDialogProps> = ({ isOpen, onClose, options,
         </div>
 
         {/* Footer */}
-        <div className="p-6 bg-slate-900/50 border-t border-slate-700 flex justify-between shrink-0">
-            <div className="flex space-x-3">
+        <div className="p-4 bg-slate-900/50 border-t border-slate-700 flex justify-between shrink-0">
+            <div className="flex space-x-2">
                  <button onClick={handleRestoreDefaults} className="p-2 hover:bg-white/10 rounded-lg text-slate-400 hover:text-white transition-colors" title="Restore Defaults">
-                    <RotateCcw size={20} />
+                    <RotateCcw size={18} />
                 </button>
-                <div className="w-px h-full bg-slate-700 mx-2"></div>
+                <div className="w-px h-full bg-slate-700 mx-1"></div>
                 <button onClick={handleSaveConfig} className="p-2 hover:bg-white/10 rounded-lg text-slate-400 hover:text-white transition-colors" title="Save Config (.klc)">
-                    <Download size={20} />
+                    <Download size={18} />
                 </button>
                 <button onClick={() => fileInputRef.current?.click()} className="p-2 hover:bg-white/10 rounded-lg text-slate-400 hover:text-white transition-colors" title="Load Config (.klc)">
-                    <Upload size={20} />
+                    <Upload size={18} />
                 </button>
                 <input type="file" ref={fileInputRef} hidden accept=".klc" onChange={handleLoadConfig} />
             </div>
 
-            <button onClick={onClose} className="px-8 py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-bold text-lg transition-colors shadow-lg">
+            <button onClick={onClose} className="px-6 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-bold text-sm transition-colors shadow-lg">
                 Done
             </button>
         </div>

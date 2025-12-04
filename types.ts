@@ -8,16 +8,20 @@ export enum ProcessingStatus {
   ENDED = 'ENDED' // For jobs that cannot be retried
 }
 
-export type TaskType = 'full' | 'model' | 'background' | 'model-full' | 'backside' | 'scan-people' | 'nude' | 'nude-opposite' | 'face' | 'face-left' | 'face-right' | 'neutral' | 'neutral-nude' | 'all-people' | 'all-people-nude' | 'upscale';
+export type TaskType = 'full' | 'full-nude' | 'model' | 'background' | 'model-full' | 'backside' | 'scan-people' | 'nude' | 'nude-opposite' | 'face' | 'face-left' | 'face-right' | 'neutral' | 'neutral-nude' | 'all-people' | 'all-people-nude' | 'upscale';
 
 export interface GeneratedImage {
   type: TaskType;
   url: string;
+  blob?: Blob; // For DB Persistence
 }
+
+export type PriorityLevel = 'Very Low' | 'Low' | 'Normal' | 'High' | 'Very High';
 
 export interface AppOptions {
   taskTypes: {
     full: boolean;
+    fullNude: boolean; // New
     background: boolean;
     allPeople: boolean;
     allPeopleNude: boolean;
@@ -27,11 +31,29 @@ export interface AppOptions {
     nudeOpposite: boolean;
     modelFull: boolean;
     face: boolean;
-    faceLeft: boolean; // New
-    faceRight: boolean; // New
-    neutral: boolean; // New
-    neutralNude: boolean; // New
+    faceLeft: boolean; 
+    faceRight: boolean; 
+    neutral: boolean; 
+    neutralNude: boolean; 
     upscale: boolean; 
+  };
+  taskPriorities: {
+    full: PriorityLevel;
+    fullNude: PriorityLevel; // New
+    background: PriorityLevel;
+    allPeople: PriorityLevel;
+    allPeopleNude: PriorityLevel;
+    model: PriorityLevel;
+    backside: PriorityLevel;
+    nude: PriorityLevel;
+    nudeOpposite: PriorityLevel;
+    modelFull: PriorityLevel;
+    face: PriorityLevel;
+    faceLeft: PriorityLevel;
+    faceRight: PriorityLevel;
+    neutral: PriorityLevel;
+    neutralNude: PriorityLevel;
+    upscale: PriorityLevel;
   };
   gender: string;
   detailLevel: string;

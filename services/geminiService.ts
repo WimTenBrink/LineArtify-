@@ -359,7 +359,7 @@ export const generateLineArtTask = async (
       const autoCropTypes = [
         'model', 'model-full', 'backside', 'nude', 'nude-opposite', 
         'face', 'face-left', 'face-right', 'neutral', 'neutral-nude',
-        'all-people', 'all-people-nude'
+        'all-people', 'all-people-nude', 'full-nude'
       ];
       if (autoCropTypes.includes(taskType)) {
          onStatusUpdate?.(`Auto-cropping ${taskName}...`);
