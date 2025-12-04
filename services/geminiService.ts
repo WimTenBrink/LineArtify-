@@ -1,6 +1,7 @@
 
 import { GoogleGenAI } from "@google/genai";
 import { LogLevel, GeneratedImage, TaskType } from "../types";
+import { TASK_DEFINITIONS } from "./taskDefinitions";
 
 // Helper to encode file to base64
 export const fileToGenerativePart = async (file: File): Promise<string> => {
@@ -167,8 +168,8 @@ const extractImageFromResponse = (response: any, logTitle: string, addLog: any):
       const reason = candidate.finishReason;
       addLog(LogLevel.WARN, `Gemini finished with reason: ${reason} for ${logTitle}`);
       
-      if (reason === "SAFETY") {
-        throw new Error(`Generation blocked by safety settings for ${logTitle}.`);
+      if (reason === "SAFETY" || reason === "PROHIBITED_CONTENT") {
+        throw new Error(`Generation blocked by Safety Policy. Try a different angle or less explicit subject.`);
       }
       throw new Error(`Gemini finished with non-success reason: ${reason}`);
     }
@@ -284,262 +285,62 @@ export const generateLineArtTask = async (
   
   onStatusUpdate?.(`Encoding image data...`);
   const base64Data = await fileToGenerativePart(file);
-  const modelName = 'gemini-2.5-flash-image';
+  
+  // Use separate model for upscale
+  const isUpscale = taskType === 'upscale';
+  const modelName = isUpscale ? 'gemini-3-pro-image-preview' : 'gemini-2.5-flash-image';
+  
+  // Get prompt from Task Definitions
+  let prompt = "";
+  let taskName = "";
 
-  // --- Prompts ---
-  
-  const genderInstruction = gender !== 'As-is' 
-    ? `IMPORTANT: Depict the subject as ${gender.toUpperCase()}. Adjust anatomy, facial features, and body proportions to clearly match this gender.` 
-    : "";
-  
-  let detailInstruction = "";
-  if (detailLevel === 'Low') {
-    detailInstruction = "DETAIL LEVEL: LOW / SIMPLIFIED. Use fewer lines. Focus on the main silhouette and major shapes. Omit fine textures, small folds, and minor details. Create a clean, minimalist look.";
-  } else if (detailLevel === 'High') {
-    detailInstruction = "DETAIL LEVEL: HIGH / INTRICATE. Maximize detail. Capture every texture, fold, strand of hair, and surface nuance. Use intricate linework. Create a dense, highly detailed illustration.";
+  if (taskType === 'upscale') {
+      taskName = "Upscale (4K)";
+      prompt = `
+        Task: Upscale and enhance the resolution of this line art to 4K quality.
+        Context: The input is a line art drawing.
+        Instructions:
+        - Preserve the original style, linework, and details exactly.
+        - Do not add new content or change the composition.
+        - Sharpen lines and remove any compression artifacts.
+        - Output the highest resolution possible.
+        - Background: Keep the background EXACTLY as it is (Transparency or White).
+      `;
+  } else if (TASK_DEFINITIONS[taskType]) {
+      const def = TASK_DEFINITIONS[taskType];
+      taskName = def.label;
+      if (personDescription) taskName += ` (${personDescription})`;
+      
+      prompt = def.prompt({
+          gender,
+          detailLevel,
+          personDescription
+      });
   } else {
-    // Medium / Default
-    detailInstruction = "DETAIL LEVEL: MEDIUM / BALANCED. Capture essential details while maintaining clarity. Standard professional line art.";
+      throw new Error(`Unknown Task Type: ${taskType}`);
   }
 
-  const styleInstruction = "Style: Strict BLACK AND WHITE line art. NO gray fills. NO colored surfaces. NO shading. Pure white background.";
-  const orientationInstruction = "Orientation: Ensure the generated image is UPRIGHT and vertically aligned, correcting any rotation from the input image.";
-  const allAgesInstruction = "Subject: The subject may be of any age. Create a respectful, general-purpose figure study.";
-  const cyberneticInstruction = "CYBERNETICS: If the subject has cybernetic limbs, prosthetics, or mechanical body parts, PRESERVE THEM EXACTLY. Do not convert them to biological skin. Treat them as part of the subject's anatomy.";
-  const bodyTypeInstruction = "BODY TYPE: Natural, realistic proportions. Do NOT exaggerate muscles. Do NOT create hyper-muscular or superhero physiques. Keep the anatomy lean and natural.";
-  
-  const strictPoseInstruction = `
-    CRITICAL POSE ADHERENCE:
-    - You must trace the EXACT pose of the original subject.
-    - Do not change the position of HANDS, FEET, FINGERS, or HEAD TILT.
-    - Retain the exact Hairstyle and Facial Expression.
-    - Do not halluncinate new gestures.
-  `;
+  const createPayload = (promptStr: string) => {
+    const payload: any = {
+      model: modelName,
+      contents: {
+        parts: [
+          { inlineData: { mimeType: file.type, data: base64Data } },
+          { text: promptStr }
+        ]
+      },
+      config: { 
+          safetySettings: SAFETY_SETTINGS_BLOCK_NONE,
+      }
+    };
 
-  // Specific targeting for multi-person support
-  const targetInstruction = personDescription 
-    ? `TARGET SUBJECT: Focus ONLY on "${personDescription}". Ignore other people in the image.` 
-    : "";
+    // Add upscale config
+    if (isUpscale) {
+        payload.config.imageConfig = { imageSize: '4K' };
+    }
 
-  const promptFull = `
-    You are an expert technical illustrator creating a high-fidelity line art reproduction.
-    Task: Convert the provided image into a high-detail line art drawing.
-    
-    Context:
-    - This is an artistic tool for sketching and drawing based on photos.
-    - ${allAgesInstruction}
-    - ${genderInstruction}
-    - ${detailInstruction}
-    - ${cyberneticInstruction}
-    - ${bodyTypeInstruction}
-
-    Technical Requirements:
-    - ${orientationInstruction}
-    - Output: PNG image with an Alpha Channel (Transparency).
-    - ${styleInstruction}
-    - Content: Capture all details: characters, background, objects, textures.
-    - ${strictPoseInstruction}
-    - Background: MUST be transparent. Do not render white pixels for the background.
-    - Return ONLY the image.
-  `;
-
-  const promptModel = `
-    You are an expert anatomical artist.
-    Task: Extract the specific character as a clean MANNEQUIN-STYLE line art figure.
-    
-    Context:
-    - ${targetInstruction}
-    - ${allAgesInstruction}
-    - ${genderInstruction}
-    - ${detailInstruction}
-    - ${cyberneticInstruction}
-    - ${bodyTypeInstruction}
-
-    Technical Requirements:
-    - ${orientationInstruction}
-    - Output: PNG image with a SOLID WHITE background. NO transparency.
-    - ${styleInstruction}
-    - Background: Pure White (#FFFFFF).
-    - COLOR REMOVAL: The output must be strictly black lines on white.
-
-    Content:
-    - Isolate the character completely.
-    - ${strictPoseInstruction}
-    - CLOTHING REMOVAL / SIMPLIFICATION: Focus on the BODY CONTOUR and ANATOMICAL STRUCTURE. 
-    - Treat clothing as minimal or non-existent to reveal the pose (like a drawing base mesh or mannequin). 
-    - Do NOT draw detailed clothing patterns or textures.
-    - Maintain modesty (smooth mannequin surface) where appropriate, but ensure the limb structure and pose are perfectly clear for sketching reference.
-  `;
-
-  const promptModelFull = `
-    You are an expert artist.
-    Task: Create a COMPLETE FULL BODY line art of the main character, even if the original image is cropped.
-    
-    Context:
-    - The user provided an image where the character might be missing feet, legs, or other parts.
-    - You MUST INVENT and DRAW the missing parts to show the character standing or posing naturally.
-    - ${allAgesInstruction}
-    - ${genderInstruction}
-    - ${detailInstruction}
-    - ${cyberneticInstruction}
-    - ${bodyTypeInstruction}
-    
-    Technical Requirements:
-    - ${orientationInstruction}
-    - Output: PNG image with a SOLID WHITE background.
-    - ${styleInstruction}
-    - The figure must be complete from HEAD to TOE.
-    - Maintain the pose of the visible parts, and extend it naturally for the missing parts.
-  `;
-
-  const promptOpposite = `
-    You are a conceptual artist and technical draftsman.
-    Task: Create a line art drawing of the subject as seen from the DIRECT OPPOSITE ANGLE (180-degree rotation).
-    
-    CRITICAL INSTRUCTION:
-    - Analyze the input image to determine the current viewing angle (Front, Back, Left, Right).
-    - Generate the COMPLEMENTARY view:
-      * If Input is FRONT view -> Generate BACK view.
-      * If Input is BACK view -> Generate FRONT view.
-      * If Input is LEFT profile -> Generate RIGHT profile.
-      * If Input is RIGHT profile -> Generate LEFT profile.
-    
-    Context:
-    - You must hallucinate/invent the hidden details (e.g., face if seeing back, backpack if seeing front) based on the visible cues.
-    - ${targetInstruction}
-    - ${allAgesInstruction}
-    - ${genderInstruction}
-    - ${detailInstruction}
-    - ${cyberneticInstruction}
-    - ${bodyTypeInstruction}
-    
-    Pose Requirements:
-    - STAY STRICT WITH THE POSE. The limb positioning, head tilt, and stance must be identical to the original, just viewed from the opposite side.
-    - Do not change the action or gesture.
-    - CLOTHING REMOVAL / SIMPLIFICATION: Like the front view, simplify clothing to show the ANATOMICAL STRUCTURE and POSE. Create a clean figure study/mannequin style.
-    
-    Technical Requirements:
-    - ${orientationInstruction}
-    - Output: PNG image with a SOLID WHITE background.
-    - ${styleInstruction}
-    - No background scenery. Just the figure isolated.
-  `;
-
-  const promptBackground = `
-    You are an expert background artist for animation.
-    Task: Create a line art of the BACKGROUND ONLY.
-    
-    Context:
-    - Remove ALL humans, characters, and animals.
-    - INTELLIGENTLY FILL IN the missing parts where the characters used to be, reconstructing the scene behind them.
-    - ${detailInstruction}
-    
-    Technical Requirements:
-    - ${orientationInstruction}
-    - Output: PNG image with an Alpha Channel (Transparency).
-    - Style: Clean, precise black lines matching the style of the original.
-    - Background: MUST be transparent.
-    - Content: Only the environment (rooms, nature, buildings, furniture). NO PEOPLE.
-  `;
-
-  const promptNude = `
-    You are an expert anatomical artist doing a FIGURE STUDY.
-    Task: Draw the subject as a neutral ANATOMICAL FIGURE or BASE MESH (Nude/No Clothes) to capture the pure pose.
-    
-    CRITICAL REQUIREMENTS:
-    - ${targetInstruction}
-    - CLOTHING: REMOVE ALL CLOTHING. Draw the bare skin surface and muscle structure.
-    - ${cyberneticInstruction}
-    - SAFETY/MODESTY: This is an artistic anatomy study. DO NOT draw explicit genitalia or sexual features. Use "Barbie/Ken doll" smooth surfaces for private areas. The goal is POSE REFERENCE, not adult content.
-    - POSE: Copy the EXACT pose, hands, fingers, and facial expression of the subject.
-    - FULL BODY: Ensure the drawing is FULL BODY. If feet/legs are cropped in the photo, you MUST reconstruct them to show the full standing/sitting figure.
-    - FACE/HANDS: Keep facial details (eyes, nose, mouth) and hands distinct and accurate.
-    
-    Context:
-    - ${allAgesInstruction}
-    - ${genderInstruction}
-    - ${detailInstruction}
-    - ${bodyTypeInstruction}
-
-    Technical Requirements:
-    - ${orientationInstruction}
-    - Output: PNG image with a SOLID WHITE background.
-    - ${styleInstruction}
-    - Background: Pure White (#FFFFFF).
-  `;
-
-  const promptNudeOpposite = `
-    You are an expert anatomical artist doing a FIGURE STUDY from the OPPOSITE ANGLE.
-    Task: Draw the subject as a neutral ANATOMICAL FIGURE (Nude/No Clothes) from the 180-degree REVERSE VIEW.
-    
-    CRITICAL INSTRUCTION:
-    - Analyze input view -> Generate COMPLEMENTARY view (Front->Back, Back->Front, Left->Right).
-    - CLOTHING: REMOVE ALL CLOTHING. Draw the bare skin surface and muscle structure.
-    - ${cyberneticInstruction}
-    - SAFETY/MODESTY: Non-explicit anatomical study. No genitalia. Use smooth mannequin surfaces.
-    - POSE: Keep the exact limb positioning and stance, just viewed from the other side.
-    - FULL BODY: MUST be full body. Invent missing legs/feet if needed.
-    
-    Context:
-    - ${targetInstruction}
-    - ${allAgesInstruction}
-    - ${genderInstruction}
-    - ${detailInstruction}
-    - ${bodyTypeInstruction}
-    
-    Technical Requirements:
-    - ${orientationInstruction}
-    - Output: PNG image with a SOLID WHITE background.
-    - ${styleInstruction}
-    - Background: Pure White (#FFFFFF).
-  `;
-
-  let prompt = promptFull;
-  let taskName = "Full Line Art";
-  
-  switch (taskType) {
-      case 'full': 
-          prompt = promptFull; 
-          taskName = "Full Line Art";
-          break;
-      case 'model': 
-          prompt = promptModel; 
-          taskName = personDescription ? `Character Extraction (${personDescription})` : "Character Extraction";
-          break;
-      case 'background': 
-          prompt = promptBackground; 
-          taskName = "Background";
-          break;
-      case 'model-full': 
-          prompt = promptModelFull; 
-          taskName = "Body Reconstruction";
-          break;
-      case 'backside':
-          prompt = promptOpposite;
-          taskName = personDescription ? `Opposite View (${personDescription})` : "Opposite View";
-          break;
-      case 'nude':
-          prompt = promptNude;
-          taskName = personDescription ? `Body Pose/Nude (${personDescription})` : "Body Pose/Nude";
-          break;
-      case 'nude-opposite':
-          prompt = promptNudeOpposite;
-          taskName = personDescription ? `Opposite Body/Nude (${personDescription})` : "Opposite Body/Nude";
-          break;
-      case 'scan-people':
-          throw new Error("Scan task should not call generateLineArtTask");
-  }
-
-  const createPayload = (promptStr: string) => ({
-    model: modelName,
-    contents: {
-      parts: [
-        { inlineData: { mimeType: file.type, data: base64Data } },
-        { text: promptStr }
-      ]
-    },
-    config: { safetySettings: SAFETY_SETTINGS_BLOCK_NONE }
-  });
+    return payload;
+  };
 
   addLog(LogLevel.INFO, `Starting generation for ${file.name} [${taskName}] with ${detailLevel} detail`);
   onStatusUpdate?.(`Generating ${taskName}...`);
@@ -549,9 +350,9 @@ export const generateLineArtTask = async (
       
       let url = extractImageFromResponse(response, `${file.name} (${taskName})`, addLog);
       
-      // Special post-processing for model types
-      // Updated to include 'nude' and 'nude-opposite' in the auto-crop logic
-      if (['model', 'model-full', 'backside', 'nude', 'nude-opposite'].includes(taskType)) {
+      // Special post-processing for model types and all-people types
+      // Updated to include 'all-people' and 'all-people-nude' in the auto-crop logic
+      if (['model', 'model-full', 'backside', 'nude', 'nude-opposite', 'face', 'all-people', 'all-people-nude'].includes(taskType)) {
          onStatusUpdate?.(`Auto-cropping ${taskName}...`);
          url = await cropToContent(url, 10);
       }
@@ -559,7 +360,22 @@ export const generateLineArtTask = async (
       return { type: taskType, url };
 
   } catch (error: any) {
-      addLog(LogLevel.WARN, `Failed to generate ${taskName}: ${error.message}`);
-      throw error;
+      let friendlyError = error.message;
+
+      // Map common errors to friendly messages
+      if (error.message.includes('403') || error.message.includes('API key')) {
+          friendlyError = "Access Denied: Invalid API Key. Please verify your key in settings.";
+      } else if (error.message.includes('400') || error.message.includes('INVALID_ARGUMENT')) {
+          friendlyError = "Bad Request: The image may be corrupted or the format is unsupported.";
+      } else if (error.message.includes('503') || error.message.includes('Overloaded')) {
+          friendlyError = "Service Overloaded: Google's servers are busy. Retrying automatically...";
+      } else if (error.message.includes('SAFETY') || error.message.includes('PROHIBITED')) {
+          friendlyError = "Content Policy Violation: The AI refused to generate this image due to safety settings.";
+      }
+
+      addLog(LogLevel.WARN, `Failed to generate ${taskName}: ${friendlyError}`);
+      
+      // Throw the friendly error
+      throw new Error(friendlyError);
   }
 };

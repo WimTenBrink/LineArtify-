@@ -5,23 +5,11 @@ import { generateLineArtTask, detectPeople } from './services/geminiService';
 import Console from './components/Console';
 import ImageViewer from './components/ImageViewer';
 import ManualDialog from './components/ManualDialog';
-import { QueueItem, ProcessingStatus, LogLevel, LogEntry, GeneratedImage, TaskType } from './types';
-import { Upload, X, RefreshCw, AlertCircle, CheckCircle2, Image as ImageIcon, Terminal, Maximize, Play, Pause, Layers, User, Image, Trash2, Eraser, Key, ChevronDown, AlertTriangle, Brain, FileText, Users, Expand, Book, Repeat, Filter, ScanFace, Clock, ChevronUp, ChevronsUp, ChevronsDown, ZoomIn, Sliders, ArrowRightCircle, PersonStanding, CheckCheck, Save, FolderOpen, UserX } from 'lucide-react';
+import OptionsDialog from './components/OptionsDialog';
+import { QueueItem, ProcessingStatus, LogLevel, AppOptions, SourceImage, TaskType } from './types';
+import { Upload, X, RefreshCw, Play, Pause, Trash2, Key, Save, FolderOpen, Terminal, Book, ChevronRight, Settings, Image as ImageIcon, Layers, User, AlertTriangle, CheckCircle2, ScanFace, Check, Repeat, RefreshCcw, Wand2, Square, CheckSquare } from 'lucide-react';
 
 const MAX_CONCURRENT_REQUESTS = 3;
-const MAX_RETRY_LIMIT = 5;
-
-// Definitions including the special 'scan-people' task which isn't shown as a final type usually
-const TASK_DEFINITIONS: { type: TaskType, label: string }[] = [
-    { type: 'full', label: 'Full Scene' },
-    { type: 'model', label: 'Character Extraction' },
-    { type: 'background', label: 'Background Only' },
-    { type: 'model-full', label: 'Body Reconstruction' },
-    { type: 'backside', label: 'Opposite View' },
-    { type: 'nude', label: 'Nude' },
-    { type: 'nude-opposite', label: 'Nude Opposite' },
-    { type: 'scan-people', label: 'Scanning for People...' }
-];
 
 // Helper for converting Blob/File to Base64 (Data URL)
 const blobToBase64 = (blob: Blob): Promise<string> => {
@@ -33,1490 +21,920 @@ const blobToBase64 = (blob: Blob): Promise<string> => {
   });
 };
 
+type QueueView = 'UPLOADS' | 'JOBS' | 'FULL' | 'BACKGROUND' | 'COUNTING' | 'RETRY' | 'FAILED' | 'ENDED' | 'MODEL' | 'BACKSIDE' | 'NUDE' | 'NUDE_OPPOSITE' | 'MODEL_FULL' | 'FACE' | 'ALL_PEOPLE' | 'ALL_PEOPLE_NUDE' | 'UPSCALE';
+
 export default function App() {
-  const [queue, setQueue] = useState<QueueItem[]>([]);
-  const [processingCount, setProcessingCount] = useState(0);
-  const [isProcessingEnabled, setIsProcessingEnabled] = useState(false); // Default stopped
-  const [processingStatus, setProcessingStatus] = useState<string>("");
+  // Data State
+  const [uploads, setUploads] = useState<SourceImage[]>([]);
+  const [queue, setQueue] = useState<QueueItem[]>([]); // "The Master Job List"
+  
+  // App Config State
+  const [options, setOptions] = useState<AppOptions>({
+    taskTypes: {
+      full: true,
+      background: true,
+      allPeople: true, // Default Checked
+      allPeopleNude: true, // Default Checked
+      model: true,
+      backside: true,
+      nude: true, // Default Checked
+      nudeOpposite: true, // Default Checked
+      modelFull: true, // Default Checked
+      face: true
+    },
+    gender: 'Female', // Default Female
+    detailLevel: 'Medium' // Default Medium
+  });
+
+  // UI State
+  const [activeQueueView, setActiveQueueView] = useState<QueueView>('UPLOADS');
   const [viewerItemId, setViewerItemId] = useState<string | null>(null);
   const [isConsoleOpen, setIsConsoleOpen] = useState(false);
   const [isManualOpen, setIsManualOpen] = useState(false);
-  const [isErrorDropdownOpen, setIsErrorDropdownOpen] = useState(false);
-  const [gender, setGender] = useState<string>('As-is'); // Gender state
-  const [detailLevel, setDetailLevel] = useState<string>('Medium'); // Detail Level State
-  const [galleryFilter, setGalleryFilter] = useState<TaskType | 'ALL'>('ALL');
-  const [jobDurations, setJobDurations] = useState<number[]>([]); // Track durations for estimation
-  const [highlightedId, setHighlightedId] = useState<string | null>(null);
-  
-  // Hidden input ref for importing
+  const [isOptionsOpen, setIsOptionsOpen] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
+  const [selectedSourceIds, setSelectedSourceIds] = useState<Set<string>>(new Set());
+
+  // Queue Control State (Start/Stop per queue)
+  const [queueControls, setQueueControls] = useState({
+    global: false, // Master switch
+    full: true,
+    background: true,
+    allPeople: true,
+    allPeopleNude: true,
+    counting: true,
+    model: true,
+    backside: true,
+    nude: true,
+    nudeOpposite: true,
+    modelFull: true,
+    face: true,
+    upscale: true
+  });
+
+  const { addLog } = useLogger();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Task Selection State
-  const [taskSelection, setTaskSelection] = useState({
-    full: true,
-    model: true,
-    background: true,
-    backside: true,
-    nude: false,
-    nudeOpposite: false
-  });
+  // --- Derived Data (The "Queues") ---
 
-  const { addLog, logs } = useLogger();
-
-  // Drag and drop state
-  const [isDraggingOver, setIsDraggingOver] = useState(false);
-  const dragCounter = useRef(0);
-
-  // Derived state
-  const allSelected = Object.values(taskSelection).every(Boolean);
+  const processingJobs = queue.filter(i => i.status === ProcessingStatus.PROCESSING);
   
-  // Filter input queue to show Pending, Processing, AND Success (so we don't hide finished jobs as requested)
-  // Also respect the global type filter
-  // SORTING: Finished (Success) -> Processing -> Pending
-  const inputQueue = queue.filter(item => 
-    (item.status === ProcessingStatus.PENDING || 
-     item.status === ProcessingStatus.PROCESSING || 
-     item.status === ProcessingStatus.SUCCESS) &&
-    (galleryFilter === 'ALL' || item.taskType === galleryFilter)
-  ).sort((a, b) => {
-      const score = (s: ProcessingStatus) => {
-          if (s === ProcessingStatus.SUCCESS) return 3;
-          if (s === ProcessingStatus.PROCESSING) return 2;
-          if (s === ProcessingStatus.PENDING) return 1;
-          return 0;
-      };
-      const diff = score(b.status) - score(a.status);
-      if (diff !== 0) return diff;
-      return 0; // Stable sort
-  });
-  
-  const successQueue = queue.filter(item => item.status === ProcessingStatus.SUCCESS && item.taskType !== 'scan-people');
-  // Count only pending generation tasks for the estimator (exclude scans as they are fast/background)
-  const pendingCount = queue.filter(item => item.status === ProcessingStatus.PENDING && item.taskType !== 'scan-people').length;
+  // Helper to filter queue items
+  const getQueueItems = (type: QueueView): QueueItem[] => {
+    switch (type) {
+      case 'JOBS': return processingJobs;
+      case 'FULL': return queue.filter(i => i.taskType === 'full' && i.status === ProcessingStatus.PENDING);
+      case 'BACKGROUND': return queue.filter(i => i.taskType === 'background' && i.status === ProcessingStatus.PENDING);
+      case 'ALL_PEOPLE': return queue.filter(i => i.taskType === 'all-people' && i.status === ProcessingStatus.PENDING);
+      case 'ALL_PEOPLE_NUDE': return queue.filter(i => i.taskType === 'all-people-nude' && i.status === ProcessingStatus.PENDING);
+      case 'COUNTING': return queue.filter(i => i.taskType === 'scan-people' && i.status === ProcessingStatus.PENDING);
+      case 'MODEL': return queue.filter(i => i.taskType === 'model' && i.status === ProcessingStatus.PENDING);
+      case 'BACKSIDE': return queue.filter(i => i.taskType === 'backside' && i.status === ProcessingStatus.PENDING);
+      case 'NUDE': return queue.filter(i => i.taskType === 'nude' && i.status === ProcessingStatus.PENDING);
+      case 'NUDE_OPPOSITE': return queue.filter(i => i.taskType === 'nude-opposite' && i.status === ProcessingStatus.PENDING);
+      case 'MODEL_FULL': return queue.filter(i => i.taskType === 'model-full' && i.status === ProcessingStatus.PENDING);
+      case 'FACE': return queue.filter(i => i.taskType === 'face' && i.status === ProcessingStatus.PENDING);
+      case 'UPSCALE': return queue.filter(i => i.taskType === 'upscale' && i.status === ProcessingStatus.PENDING);
+      case 'RETRY': return queue.filter(i => i.status === ProcessingStatus.ERROR && !i.isBlocked && i.retryCount < 3);
+      case 'FAILED': return queue.filter(i => i.status === ProcessingStatus.ERROR && (i.isBlocked || (i.retryCount >= 3 && i.isLastChance)));
+      case 'ENDED': return queue.filter(i => i.status === ProcessingStatus.ENDED);
+      default: return [];
+    }
+  };
+
+  // Gallery items - Filter by selectedSourceIds if any are selected
+  const allGalleryItems = queue.filter(i => i.status === ProcessingStatus.SUCCESS && i.taskType !== 'scan-people');
+  const galleryItems = selectedSourceIds.size > 0 
+    ? allGalleryItems.filter(i => selectedSourceIds.has(i.sourceId))
+    : allGalleryItems;
 
   // Progress Calculation
-  const totalQueuedItems = queue.length;
-  const completedItems = queue.filter(i => i.status === ProcessingStatus.SUCCESS || i.status === ProcessingStatus.ERROR).length;
-  const progressPercentage = totalQueuedItems > 0 ? (completedItems / totalQueuedItems) * 100 : 0;
+  const totalJobs = queue.length;
+  // Completed = Success, Ended, or Blocked Error (Final states)
+  const completedJobs = queue.filter(i => 
+    i.status === ProcessingStatus.SUCCESS || 
+    i.status === ProcessingStatus.ENDED || 
+    (i.status === ProcessingStatus.ERROR && (i.isBlocked || i.retryCount >= 3))
+  ).length;
+  const progressPercent = totalJobs > 0 ? (completedJobs / totalJobs) * 100 : 0;
 
-  // Apply filtering to the viewable gallery
-  const filteredGallery = successQueue.filter(item => galleryFilter === 'ALL' || item.taskType === galleryFilter);
+  // --- Logic ---
 
-  const errorQueue = queue.filter(item => 
-    item.status === ProcessingStatus.ERROR &&
-    (galleryFilter === 'ALL' || item.taskType === galleryFilter)
-  );
-
-  // Viewer Helpers
-  const activeViewerItem = viewerItemId ? queue.find(i => i.id === viewerItemId) : null;
-  // Calculate index based on where the user opened the viewer from
-  const isInputQueueView = activeViewerItem && inputQueue.some(i => i.id === activeViewerItem.id);
-  const isErrorQueueView = activeViewerItem && errorQueue.some(i => i.id === activeViewerItem.id);
-  
-  // Create a context-aware navigation list
-  const viewerList = isErrorQueueView ? errorQueue : (isInputQueueView ? inputQueue : filteredGallery);
-  const viewerIndex = activeViewerItem ? viewerList.findIndex(i => i.id === activeViewerItem.id) : -1;
-
-  // Error History Logic
-  const errorLogs = logs.filter(l => l.level === LogLevel.ERROR);
-  const uniqueErrors = errorLogs.reduce((acc: LogEntry[], current) => {
-    const msg = `${current.title} ${JSON.stringify(current.details || '')}`;
-    if (!acc.find(item => `${item.title} ${JSON.stringify(item.details || '')}` === msg)) {
-      acc.push(current);
-    }
-    return acc;
-  }, []).slice(0, 5);
-  
-  const lastError = errorLogs.length > 0 ? errorLogs[0] : null;
-
-  const getErrorMessage = (log: LogEntry) => {
-    let detailMsg = '';
-    if (log.details) {
-       if (typeof log.details === 'string') detailMsg = log.details;
-       else if (log.details.message) detailMsg = log.details.message;
-       else detailMsg = JSON.stringify(log.details);
-    }
-    return `${log.title}${detailMsg ? `: ${detailMsg}` : ''}`;
-  };
-
-  const getTaskLabel = (type: TaskType) => {
-      return TASK_DEFINITIONS.find(t => t.type === type)?.label || type;
-  };
-
-  // Estimation Helpers
-  const formatDuration = (ms: number) => {
-    if (ms < 1000) return "< 1s";
-    const sec = Math.floor((ms / 1000) % 60);
-    const min = Math.floor((ms / (1000 * 60)) % 60);
-    const hr = Math.floor(ms / (1000 * 60 * 60));
-    
-    if (hr > 0) return `${hr}h ${min}m`;
-    if (min > 0) return `${min}m ${sec}s`;
-    return `${sec}s`;
-  };
-
-  const averageDuration = jobDurations.length > 0 
-      ? jobDurations.reduce((acc, curr) => acc + curr, 0) / jobDurations.length 
-      : 12000; // Default conservative start guess (12s)
-  
-  const estimatedMs = pendingCount * averageDuration;
-
-  // Scroll to highlighted item in gallery
-  useEffect(() => {
-    if (highlightedId) {
-        const el = document.getElementById(`gallery-item-${highlightedId}`);
-        if (el) {
-            el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-        }
-    }
-  }, [highlightedId]);
-
-  // --- Handlers ---
-
-  const toggleAll = () => {
-    const newState = !allSelected;
-    setTaskSelection({
-      full: newState,
-      model: newState,
-      background: newState,
-      backside: newState,
-      nude: newState,
-      nudeOpposite: newState
-    });
-  };
-
-  const toggleTask = (key: keyof typeof taskSelection) => {
-    setTaskSelection(prev => ({ ...prev, [key]: !prev[key] }));
-  };
-
-  const handleApiKeyChange = async () => {
-    try {
-      if ((window as any).aistudio && (window as any).aistudio.openSelectKey) {
-        await (window as any).aistudio.openSelectKey();
-        addLog(LogLevel.INFO, "API Key update requested by user.");
-      } else {
-        alert("API Key selection is not available in this environment.");
-      }
-    } catch (e) {
-      console.error("Failed to open API key selector", e);
-    }
-  };
-
-  const handleFiles = useCallback((files: FileList | null) => {
+  const handleUpload = useCallback((files: FileList | null) => {
     if (!files) return;
+    const newUploads: SourceImage[] = [];
     
-    const newItems: QueueItem[] = [];
-    
-    Array.from(files)
-      .filter(file => file.type.startsWith('image/'))
-      .forEach(file => {
-          const timestamp = Date.now();
-          const thumbUrl = URL.createObjectURL(file);
-
-          // Standard global tasks (Scene level)
-          if (taskSelection.full) {
-             newItems.push({
-                  id: crypto.randomUUID(),
-                  file,
-                  taskType: 'full',
-                  thumbnailUrl: thumbUrl,
-                  status: ProcessingStatus.PENDING,
-                  timestamp,
-                  retryCount: 0,
-                  errorHistory: []
-              });
-          }
-          
-          if (taskSelection.background) {
-             newItems.push({
-                  id: crypto.randomUUID(),
-                  file,
-                  taskType: 'background',
-                  thumbnailUrl: thumbUrl,
-                  status: ProcessingStatus.PENDING,
-                  timestamp,
-                  retryCount: 0,
-                  errorHistory: []
-              });
-          }
-
-          // Special Scan Task (Detects people -> Spawns Model, Backside, Nude tasks)
-          if (taskSelection.model || taskSelection.backside || taskSelection.nude || taskSelection.nudeOpposite) {
-              newItems.push({
-                  id: crypto.randomUUID(),
-                  file,
-                  taskType: 'scan-people',
-                  thumbnailUrl: thumbUrl,
-                  status: ProcessingStatus.PENDING,
-                  timestamp,
-                  retryCount: 0,
-                  errorHistory: []
-              });
-          }
-      });
-
-    if (newItems.length > 0) {
-      setQueue(prev => {
-          // De-duplication logic (Compound key: File + Task + PersonDesc)
-          const existingKeys = new Set(prev.map(i => `${i.file.name}-${i.taskType}-${i.personDescription || ''}`));
-          const uniqueNewItems = newItems.filter(i => !existingKeys.has(`${i.file.name}-${i.taskType}-${i.personDescription || ''}`));
-          
-          if (uniqueNewItems.length > 0) {
-             addLog(LogLevel.INFO, `Added ${uniqueNewItems.length} jobs to input queue.`);
-             return [...prev, ...uniqueNewItems];
-          }
-          return prev;
-      });
-    }
-  }, [addLog, taskSelection]);
-
-  // Global DnD Handlers
-  const handleDragEnter = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    dragCounter.current += 1;
-    if (e.dataTransfer.types.some(type => type === 'Files')) {
-      setIsDraggingOver(true);
-    }
-  }, []);
-
-  const handleDragLeave = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    dragCounter.current -= 1;
-    if (dragCounter.current === 0) {
-      setIsDraggingOver(false);
-    }
-  }, []);
-
-  const handleDragOver = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-  }, []);
-
-  const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDraggingOver(false);
-    dragCounter.current = 0;
-    handleFiles(e.dataTransfer.files);
-  }, [handleFiles]);
-
-  const handleRetry = (id: string) => {
-    setQueue(prev => {
-      const item = prev.find(i => i.id === id);
-      if (!item) return prev;
-      
-      const isSuccess = item.status === ProcessingStatus.SUCCESS;
-
-      if (!isSuccess && item.retryCount >= MAX_RETRY_LIMIT) return prev;
-
-      const others = prev.filter(i => i.id !== id);
-      return [...others, { 
-          ...item, 
-          status: ProcessingStatus.PENDING, 
-          errorMessage: undefined,
-          retryCount: isSuccess ? 0 : item.retryCount,
-          result: isSuccess ? undefined : item.result,
-          errorHistory: isSuccess ? [] : item.errorHistory
-      }];
-    });
-    addLog(LogLevel.INFO, `Manually retrying/rerunning item ${id}`);
-  };
-
-  const handleRetryAll = () => {
-    setQueue(prev => prev.map(item => 
-      (item.status === ProcessingStatus.ERROR && item.retryCount < MAX_RETRY_LIMIT)
-        ? { ...item, status: ProcessingStatus.PENDING, errorMessage: undefined }
-        : item
-    ));
-    addLog(LogLevel.INFO, "Retrying all eligible failed items.");
-  };
-
-  const handleDelete = (id: string) => {
-    setQueue(prev => prev.filter(i => i.id !== id));
-    addLog(LogLevel.INFO, `Deleted item ${id}`);
-  };
-
-  const handleClearInputQueue = () => {
-    setQueue(prev => prev.filter(i => i.status !== ProcessingStatus.PENDING));
-    addLog(LogLevel.INFO, "Cleared input queue (removed all pending items).");
-  };
-
-  const handleDeleteAllErrors = () => {
-    setQueue(prev => prev.filter(i => i.status !== ProcessingStatus.ERROR));
-    addLog(LogLevel.INFO, "Deleted all error items.");
-  };
-  
-  const handleDeleteNoPeopleErrors = () => {
-    setQueue(prev => prev.filter(i => {
-       if (i.status !== ProcessingStatus.ERROR) return true;
-       // Keep item if error is NOT related to "No people"
-       const isNoPeopleError = i.errorMessage?.includes("No people detected") || i.errorMessage?.includes("All subjects too small");
-       return !isNoPeopleError;
-    }));
-    addLog(LogLevel.INFO, "Deleted 'No people detected' errors.");
-  };
-
-  const handleClearGallery = () => {
-    setQueue(prev => prev.filter(i => i.status !== ProcessingStatus.SUCCESS));
-    addLog(LogLevel.INFO, "Cleared gallery (removed all success items).");
-  };
-
-  const handleLocateInGallery = (id: string) => {
-    const el = document.getElementById(`gallery-item-${id}`);
-    if (el) {
-        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        // Optional temporary highlight logic could go here
-        el.classList.add('ring-4', 'ring-indigo-500');
-        setTimeout(() => el.classList.remove('ring-4', 'ring-indigo-500'), 2000);
-    }
-  };
-
-  const handleReorder = (id: string, direction: 'top' | 'up' | 'down' | 'bottom') => {
-    setQueue(prev => {
-      const newQueue = [...prev];
-      const index = newQueue.findIndex(i => i.id === id);
-      if (index === -1) return prev;
-
-      // Identify indices of all items belonging to the "Input Queue" view logic
-      const pendingIndices = newQueue
-        .map((item, idx) => ({ ...item, originalIndex: idx }))
-        .filter(item => 
-            item.status === ProcessingStatus.PENDING || 
-            item.status === ProcessingStatus.PROCESSING
-        )
-        .map(i => i.originalIndex);
-      
-      const currentPendingPos = pendingIndices.indexOf(index);
-      // If item is not pending, we don't reorder it in the processing queue
-      if (currentPendingPos === -1) return prev;
-
-      let targetPendingPos = currentPendingPos;
-       if (direction === 'up') targetPendingPos--;
-       if (direction === 'down') targetPendingPos++;
-       if (direction === 'top') targetPendingPos = 0;
-       if (direction === 'bottom') targetPendingPos = pendingIndices.length - 1;
-
-       if (targetPendingPos < 0 || targetPendingPos >= pendingIndices.length || targetPendingPos === currentPendingPos) return prev;
-
-       const targetIndex = pendingIndices[targetPendingPos];
-       
-       // Robust method: Extract all pending items, reorder them array-wise, then place them back into the main queue slots.
-       const pendingItems = pendingIndices.map(i => prev[i]);
-       const movedItem = pendingItems[currentPendingPos];
-       pendingItems.splice(currentPendingPos, 1);
-       pendingItems.splice(targetPendingPos, 0, movedItem);
-       
-       pendingIndices.forEach((originalIndex, i) => {
-           newQueue[originalIndex] = pendingItems[i];
+    Array.from(files).filter(f => f.type.startsWith('image/')).forEach(file => {
+       const id = crypto.randomUUID();
+       newUploads.push({
+         id,
+         file,
+         thumbnailUrl: URL.createObjectURL(file),
+         timestamp: Date.now()
        });
-       
-       return newQueue;
     });
-  };
 
-  // --- Export / Import Handlers ---
-  const handleExportQueue = async () => {
-    if (queue.length === 0) {
-      addLog(LogLevel.WARN, "Queue is empty. Nothing to export.");
-      return;
+    if (newUploads.length > 0) {
+      setUploads(prev => [...prev, ...newUploads]);
+      addLog(LogLevel.INFO, `Uploaded ${newUploads.length} images.`);
+      populateQueues(newUploads);
     }
+  }, [options, addLog]);
 
-    addLog(LogLevel.INFO, "Starting queue export...");
-    try {
-      // Serialize queue
-      const serializableQueue = await Promise.all(queue.map(async (item) => {
-        // Convert source file to Base64
-        const fileBase64 = await blobToBase64(item.file);
-        
-        // Convert result if exists (Generated Image is a Blob URL in memory)
-        let resultBase64 = null;
-        if (item.result?.url) {
-            try {
-                const res = await fetch(item.result.url);
-                const blob = await res.blob();
-                resultBase64 = await blobToBase64(blob);
-            } catch (e) {
-                console.warn("Could not serialize result blob for", item.id);
-            }
-        }
-
-        return {
-          ...item,
-          file: {
-            name: item.file.name,
-            type: item.file.type,
-            lastModified: item.file.lastModified,
-            data: fileBase64
-          },
-          result: item.result ? { ...item.result, url: resultBase64 } : undefined,
-          thumbnailUrl: null // We will regenerate this on import
-        };
-      }));
-
-      const exportData = {
-        version: 1,
+  const populateQueues = (sources: SourceImage[]) => {
+    const newJobs: QueueItem[] = [];
+    
+    sources.forEach(source => {
+      // Full Art Job
+      newJobs.push({
+        id: crypto.randomUUID(),
+        sourceId: source.id,
+        file: source.file,
+        taskType: 'full',
+        thumbnailUrl: source.thumbnailUrl,
+        status: ProcessingStatus.PENDING,
         timestamp: Date.now(),
-        queue: serializableQueue
-      };
+        retryCount: 0,
+        maxRetries: 3,
+        errorHistory: []
+      });
 
-      const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `lineartify_queue_${new Date().toISOString().slice(0, 10)}.klj`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-      
-      addLog(LogLevel.INFO, "Queue exported successfully.");
-    } catch (e: any) {
-      addLog(LogLevel.ERROR, `Failed to export queue: ${e.message}`);
-    }
+      // Background Job
+      newJobs.push({
+        id: crypto.randomUUID(),
+        sourceId: source.id,
+        file: source.file,
+        taskType: 'background',
+        thumbnailUrl: source.thumbnailUrl,
+        status: ProcessingStatus.PENDING,
+        timestamp: Date.now(),
+        retryCount: 0,
+        maxRetries: 3,
+        errorHistory: []
+      });
+
+      // Counting Job (Scanner)
+      newJobs.push({
+        id: crypto.randomUUID(),
+        sourceId: source.id,
+        file: source.file,
+        taskType: 'scan-people',
+        thumbnailUrl: source.thumbnailUrl,
+        status: ProcessingStatus.PENDING,
+        timestamp: Date.now(),
+        retryCount: 0,
+        maxRetries: 3,
+        errorHistory: []
+      });
+    });
+
+    setQueue(prev => [...prev, ...newJobs]);
   };
 
-  const handleImportQueue = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const deleteUpload = (id: string) => {
+    setUploads(prev => prev.filter(u => u.id !== id));
+    // Cascade delete jobs
+    setQueue(prev => prev.filter(j => j.sourceId !== id));
+    addLog(LogLevel.INFO, `Deleted source image ${id} and related jobs.`);
+  };
 
-    const reader = new FileReader();
-    reader.onload = async (event) => {
-      try {
-        const text = event.target?.result as string;
-        const json = JSON.parse(text);
-        
-        if (!json.queue || !Array.isArray(json.queue)) {
-          throw new Error("Invalid file format: Missing queue array.");
-        }
+  const deleteJob = (id: string) => {
+    setQueue(prev => prev.filter(j => j.id !== id));
+  };
 
-        addLog(LogLevel.INFO, `Importing ${json.queue.length} items from ${file.name}...`);
-
-        const importedItems: QueueItem[] = await Promise.all(json.queue.map(async (item: any) => {
-           // Reconstruct File object from Base64
-           const res = await fetch(item.file.data);
-           const blob = await res.blob();
-           const reconstructedFile = new File([blob], item.file.name, { 
-             type: item.file.type, 
-             lastModified: item.file.lastModified 
-           });
-           
-           const thumbUrl = URL.createObjectURL(reconstructedFile);
-
-           // Reconstruct Result Blob URL from Base64
-           let reconstructedResult = undefined;
-           if (item.result && item.result.url) {
-               const resRes = await fetch(item.result.url);
-               const blobRes = await resRes.blob();
-               const resultUrl = URL.createObjectURL(blobRes);
-               reconstructedResult = { ...item.result, url: resultUrl };
-           }
-
-           return {
-             ...item,
-             file: reconstructedFile,
-             thumbnailUrl: thumbUrl,
-             result: reconstructedResult
-           };
-        }));
-
-        setQueue(prev => {
-           // Merge and deduplicate based on ID
-           const existingIds = new Set(prev.map(i => i.id));
-           const newItems = importedItems.filter(i => !existingIds.has(i.id));
-           
-           addLog(LogLevel.INFO, `Imported ${newItems.length} new items. (${importedItems.length - newItems.length} duplicates skipped)`);
-           return [...prev, ...newItems];
-        });
-
-      } catch (err: any) {
-        addLog(LogLevel.ERROR, `Failed to import queue: ${err.message}`);
-      } finally {
-        // Reset input
-        if (fileInputRef.current) fileInputRef.current.value = '';
-      }
+  const repeatJob = (item: QueueItem) => {
+    const newJob = { 
+        ...item, 
+        id: crypto.randomUUID(), 
+        status: ProcessingStatus.PENDING, 
+        result: undefined, 
+        retryCount: 0,
+        errorHistory: [],
+        timestamp: Date.now(),
+        isLastChance: false // Reset last chance on manual repeat
     };
-    reader.readAsText(file);
+    setQueue(prev => [...prev, newJob]);
+    addLog(LogLevel.INFO, `Repeated job for ${item.file.name} (${item.taskType})`);
   };
 
-  const triggerDownload = (url: string, originalFilename: string, prefix: string, extension: string = 'png') => {
-    try {
-      const a = document.createElement('a');
-      a.href = url;
-      const nameWithoutExt = originalFilename.substring(0, originalFilename.lastIndexOf('.')) || originalFilename;
-      a.download = `${prefix}${nameWithoutExt}.${extension}`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-    } catch (e) {
-      console.warn("Auto-download failed", e);
-    }
+  const handleUpscale = async (item: QueueItem) => {
+      if (!item.result?.url) return;
+      
+      try {
+          const res = await fetch(item.result.url);
+          const blob = await res.blob();
+          const file = new File([blob], `source-for-upscale.png`, { type: 'image/png' });
+
+          const newJob: QueueItem = {
+              id: crypto.randomUUID(),
+              sourceId: item.sourceId,
+              file: file,
+              taskType: 'upscale',
+              thumbnailUrl: item.result.url,
+              status: ProcessingStatus.PENDING,
+              timestamp: Date.now(),
+              retryCount: 0,
+              maxRetries: 3,
+              errorHistory: [],
+              personDescription: item.personDescription
+          };
+          setQueue(prev => [...prev, newJob]);
+          addLog(LogLevel.INFO, `Created Upscale job for ${item.file.name}`);
+      } catch (e) {
+          addLog(LogLevel.ERROR, "Failed to create upscale job", e);
+      }
   };
 
-  // --- Background Processing for Scanning (Immediate) ---
+  // --- Processing Loop ---
+
   useEffect(() => {
-    const processScanQueue = async () => {
-        // Find next pending scan task
-        const scanItem = queue.find(i => i.taskType === 'scan-people' && i.status === ProcessingStatus.PENDING);
-        
-        if (!scanItem) return;
+    if (!queueControls.global) return;
 
-        // Mark as Processing
-        setQueue(prev => prev.map(i => i.id === scanItem.id ? { ...i, status: ProcessingStatus.PROCESSING } : i));
+    const runProcessor = async () => {
+        if (processingJobs.length >= MAX_CONCURRENT_REQUESTS) return;
+
+        // Find next job based on priority/queues enabled
+        // Priority order: Counting -> Full -> BG -> Character/Nude...
+        let candidate: QueueItem | undefined;
+
+        // Helper to check if queue is enabled and has items
+        const findInQueue = (type: TaskType, controlKey: keyof typeof queueControls) => {
+            if (!queueControls[controlKey]) return undefined;
+            return queue.find(i => i.taskType === type && i.status === ProcessingStatus.PENDING);
+        };
+
+        // 1. Counting (Highest Priority to spawn other jobs)
+        if (!candidate) candidate = findInQueue('scan-people', 'counting');
+        
+        // 1.5. Upscale
+        if (!candidate) candidate = findInQueue('upscale', 'upscale');
+        
+        // 2. Scene / Group Tasks
+        if (!candidate) candidate = findInQueue('all-people', 'allPeople');
+        if (!candidate) candidate = findInQueue('all-people-nude', 'allPeopleNude');
+        
+        // 3. Specific tasks
+        if (!candidate) candidate = findInQueue('face', 'face');
+        if (!candidate) candidate = findInQueue('model', 'model');
+        if (!candidate) candidate = findInQueue('nude', 'nude');
+        if (!candidate) candidate = findInQueue('nude-opposite', 'nudeOpposite');
+        if (!candidate) candidate = findInQueue('backside', 'backside');
+        if (!candidate) candidate = findInQueue('model-full', 'modelFull');
+        
+        // 4. Full / BG (Lowest priority as they are large)
+        if (!candidate) candidate = findInQueue('full', 'full');
+        if (!candidate) candidate = findInQueue('background', 'background');
+
+        if (!candidate) return;
+
+        // Start Processing
+        const job = candidate;
+        setQueue(prev => prev.map(i => i.id === job.id ? { ...i, status: ProcessingStatus.PROCESSING } : i));
         
         const apiKey = process.env.API_KEY || '';
         if (!apiKey) {
-             setQueue(prev => prev.map(i => i.id === scanItem.id ? { ...i, status: ProcessingStatus.ERROR, errorMessage: 'API Key missing for scan' } : i));
-             return;
+            handleJobError(job, "Missing API Key", true);
+            return;
         }
 
         try {
-            // Detect People with Bounding Boxes
-            const peopleRaw = await detectPeople(scanItem.file, apiKey, addLog);
-            
-            // Filter by size (5% threshold)
-            const people = peopleRaw.filter(p => {
-                if (!p.box_2d) return true; // Keep if no box detected (fallback)
-                const [ymin, xmin, ymax, xmax] = p.box_2d;
-                const width = xmax - xmin;
-                const height = ymax - ymin;
-                const area = width * height;
-                const totalArea = 1000 * 1000;
-                // 5% of 1,000,000 is 50,000
-                if (area < 50000) {
-                    addLog(LogLevel.INFO, `Skipping person "${p.description}" - Size too small (${((area/totalArea)*100).toFixed(1)}%)`);
-                    return false;
-                }
-                return true;
-            }).slice(0, 10);
-            
-            // Create new tasks
-            const newJobs: QueueItem[] = [];
-            people.forEach(personData => {
-                // Job 1: Character Extraction (Model View)
-                if (taskSelection.model) {
-                  newJobs.push({
-                      id: crypto.randomUUID(),
-                      file: scanItem.file,
-                      taskType: 'model',
-                      personDescription: personData.description,
-                      detectBox: personData.box_2d, // Pass the box
-                      thumbnailUrl: scanItem.thumbnailUrl,
-                      status: ProcessingStatus.PENDING,
-                      timestamp: Date.now(),
-                      retryCount: 0,
-                      errorHistory: []
-                  });
-                }
-
-                // Job 2: Opposite View (Backside)
-                if (taskSelection.backside) {
-                  newJobs.push({
-                      id: crypto.randomUUID(),
-                      file: scanItem.file,
-                      taskType: 'backside',
-                      personDescription: personData.description,
-                      detectBox: personData.box_2d, // Pass the box
-                      thumbnailUrl: scanItem.thumbnailUrl,
-                      status: ProcessingStatus.PENDING,
-                      timestamp: Date.now(),
-                      retryCount: 0,
-                      errorHistory: []
-                  });
-                }
-
-                // Job 3: Nude / Body Pose
-                if (taskSelection.nude) {
-                  newJobs.push({
-                      id: crypto.randomUUID(),
-                      file: scanItem.file,
-                      taskType: 'nude',
-                      personDescription: personData.description,
-                      detectBox: personData.box_2d,
-                      thumbnailUrl: scanItem.thumbnailUrl,
-                      status: ProcessingStatus.PENDING,
-                      timestamp: Date.now(),
-                      retryCount: 0,
-                      errorHistory: []
-                  });
-                }
-
-                // Job 4: Nude Opposite
-                if (taskSelection.nudeOpposite) {
-                  newJobs.push({
-                      id: crypto.randomUUID(),
-                      file: scanItem.file,
-                      taskType: 'nude-opposite',
-                      personDescription: personData.description,
-                      detectBox: personData.box_2d,
-                      thumbnailUrl: scanItem.thumbnailUrl,
-                      status: ProcessingStatus.PENDING,
-                      timestamp: Date.now(),
-                      retryCount: 0,
-                      errorHistory: []
-                  });
-                }
-            });
-
-            if (peopleRaw.length === 0) {
-                 addLog(LogLevel.WARN, `No people detected in ${scanItem.file.name}. Moving to error queue.`);
-                 
-                 setQueue(prev => prev.map(i => i.id === scanItem.id ? { 
-                    ...i, 
-                    status: ProcessingStatus.ERROR, 
-                    errorMessage: "No people detected", 
-                    retryCount: i.retryCount + 1
-                 } : i));
-                 
-            } else if (newJobs.length === 0) {
-                 // People found but no tasks selected (or all filtered out by size)
-                 if (people.length === 0 && peopleRaw.length > 0) {
-                    addLog(LogLevel.INFO, `All detected people were too small in ${scanItem.file.name}.`);
-                    setQueue(prev => prev.map(i => i.id === scanItem.id ? { 
-                        ...i, 
-                        status: ProcessingStatus.ERROR, 
-                        errorMessage: "All subjects too small (<5%)", 
-                        retryCount: i.retryCount + 1
-                    } : i));
-                 } else {
-                    addLog(LogLevel.INFO, `Scan complete for ${scanItem.file.name}, but no character tasks selected.`);
-                    setQueue(prev => prev.filter(i => i.id !== scanItem.id));
-                 }
+            if (job.taskType === 'scan-people') {
+                // Special Handling for Scanner
+                await handleScanning(job, apiKey);
             } else {
-                 addLog(LogLevel.INFO, `Scan complete: ${people.length} people added for ${scanItem.file.name}.`);
-
-                // Remove scan task and add new tasks
-                setQueue(prev => {
-                    const filtered = prev.filter(i => i.id !== scanItem.id);
-                    // Deduplicate
-                    const existingKeys = new Set(filtered.map(i => `${i.file.name}-${i.taskType}-${i.personDescription || ''}`));
-                    const uniqueNewItems = newJobs.filter(i => !existingKeys.has(`${i.file.name}-${i.taskType}-${i.personDescription || ''}`));
-
-                    return [...filtered, ...uniqueNewItems];
-                });
+                // Regular Generation
+                await handleGeneration(job, apiKey);
             }
-
-        } catch (err: any) {
-             setQueue(prev => prev.map(i => i.id === scanItem.id ? { 
-                ...i, 
-                status: ProcessingStatus.ERROR, 
-                errorMessage: `Scan failed: ${err.message}`,
-                retryCount: scanItem.retryCount + 1 
-             } : i));
+        } catch (error: any) {
+             const isSafety = error.message?.includes("Content Policy") || error.message?.includes("Safety");
+             handleJobError(job, error.message || "Unknown error", isSafety);
         }
     };
 
-    processScanQueue();
-  }, [queue, addLog, taskSelection]);
+    const interval = setInterval(runProcessor, 1000);
+    return () => clearInterval(interval);
+  }, [queue, queueControls, processingJobs.length, options]); // Dependencies
 
-  // --- Main Generation Processing Logic ---
+  const handleJobError = (job: QueueItem, message: string, isSafety: boolean) => {
+      addLog(LogLevel.WARN, `Job Failed: ${message}`);
+      setQueue(prev => prev.map(i => {
+          if (i.id !== job.id) return i;
+          
+          const newRetryCount = i.retryCount + 1;
 
-  useEffect(() => {
-    const processNext = async () => {
-      if (!isProcessingEnabled) return;
-      if (processingCount >= MAX_CONCURRENT_REQUESTS) return;
+          // If it was ALREADY in the "Last Chance" state (Failed Queue) and failed again, it's over.
+          if (i.isLastChance) {
+               return {
+                  ...i,
+                  status: ProcessingStatus.ENDED, // Moves to Ended queue
+                  errorMessage: message,
+                  retryCount: newRetryCount
+               };
+          }
 
-      // Skip scan tasks here, they are handled by the effect above
-      // Prioritize 'nude' and 'nude-opposite' tasks
-      const pendingItems = queue.filter(item => item.status === ProcessingStatus.PENDING && item.taskType !== 'scan-people');
-      const nextItem = pendingItems.sort((a, b) => {
-          const isAPriority = a.taskType === 'nude' || a.taskType === 'nude-opposite';
-          const isBPriority = b.taskType === 'nude' || b.taskType === 'nude-opposite';
-          if (isAPriority && !isBPriority) return -1;
-          if (!isAPriority && isBPriority) return 1;
-          return a.timestamp - b.timestamp; // FIFO for same priority
-      })[0];
+          const isFailedQueue = isSafety || (newRetryCount >= i.maxRetries);
+          
+          return {
+              ...i,
+              status: ProcessingStatus.ERROR,
+              errorMessage: message,
+              retryCount: newRetryCount,
+              isBlocked: isSafety,
+              // If it failed too often or is safety blocked, set lastChance so it goes to Failed queue
+              isLastChance: isFailedQueue
+          };
+      }));
+  };
 
-      if (!nextItem) return;
-
-      setProcessingCount(prev => prev + 1);
-      setQueue(prev => prev.map(i => i.id === nextItem.id ? { ...i, status: ProcessingStatus.PROCESSING } : i));
+  const handleScanning = async (job: QueueItem, apiKey: string) => {
+      addLog(LogLevel.INFO, `Scanning ${job.file.name}...`);
+      const people = await detectPeople(job.file, apiKey, addLog);
       
-      const apiKey = process.env.API_KEY || '';
-      if (!apiKey) {
-        addLog(LogLevel.ERROR, 'Missing API Key');
-        setQueue(prev => prev.map(i => i.id === nextItem.id ? { ...i, status: ProcessingStatus.ERROR, errorMessage: 'API Key missing' } : i));
-        setProcessingCount(prev => prev - 1);
-        setProcessingStatus("");
-        return;
+      // Success mark for scanner
+      setQueue(prev => prev.map(i => i.id === job.id ? { ...i, status: ProcessingStatus.SUCCESS } : i));
+
+      const newJobs: QueueItem[] = [];
+
+      // HELPER: Job Creator
+      const create = (type: TaskType, description?: string, box?: number[]) => ({
+          id: crypto.randomUUID(),
+          sourceId: job.sourceId,
+          file: job.file,
+          taskType: type,
+          personDescription: description,
+          detectBox: box,
+          thumbnailUrl: job.thumbnailUrl,
+          status: ProcessingStatus.PENDING,
+          timestamp: Date.now(),
+          retryCount: 0,
+          maxRetries: 3,
+          errorHistory: []
+      });
+
+      // 1. Group Tasks (Only if more than 1 person detected)
+      if (people.length > 1) {
+          if (options.taskTypes.allPeople) {
+              newJobs.push(create('all-people'));
+          }
+          if (options.taskTypes.allPeopleNude) {
+              newJobs.push(create('all-people-nude'));
+          }
       }
 
-      const startTime = Date.now();
+      // 2. Individual Tasks (Loop through detected people)
+      people.forEach(p => {
+          if (options.taskTypes.face) newJobs.push(create('face', p.description, p.box_2d));
+          if (options.taskTypes.model) newJobs.push(create('model', p.description, p.box_2d));
+          if (options.taskTypes.backside) newJobs.push(create('backside', p.description, p.box_2d));
+          if (options.taskTypes.nude) newJobs.push(create('nude', p.description, p.box_2d));
+          if (options.taskTypes.nudeOpposite) newJobs.push(create('nude-opposite', p.description, p.box_2d));
+          if (options.taskTypes.modelFull) newJobs.push(create('model-full', p.description, p.box_2d));
+      });
 
+      if (newJobs.length > 0) {
+          addLog(LogLevel.INFO, `Spawned ${newJobs.length} tasks from scan.`);
+          setQueue(prev => [...prev, ...newJobs]);
+      } else {
+          addLog(LogLevel.INFO, `Scan complete. No tasks spawned.`);
+      }
+  };
+
+  const handleGeneration = async (job: QueueItem, apiKey: string) => {
+      const res = await generateLineArtTask(
+          job.file,
+          apiKey,
+          job.taskType,
+          options.gender,
+          options.detailLevel,
+          addLog,
+          undefined,
+          job.personDescription
+      );
+
+      setQueue(prev => prev.map(i => i.id === job.id ? { ...i, status: ProcessingStatus.SUCCESS, result: res } : i));
+
+      // Auto Download
       try {
-            setProcessingStatus(`Processing ${nextItem.file.name} [${getTaskLabel(nextItem.taskType)}]...`);
-            addLog(LogLevel.INFO, `Starting job for ${nextItem.file.name} (${nextItem.taskType}) - Detail: ${detailLevel}`);
-            
-            const result = await generateLineArtTask(
-              nextItem.file, 
-              apiKey,
-              nextItem.taskType,
-              gender,
-              detailLevel,
-              addLog,
-              (msg) => setProcessingStatus(msg),
-              nextItem.personDescription
-            );
-            
-            // Success
-            setQueue(prev => prev.map(i => i.id === nextItem.id ? { 
-              ...i, 
-              status: ProcessingStatus.SUCCESS, 
-              result: result 
-            } : i));
-            
-            const duration = Date.now() - startTime;
-            setJobDurations(prev => [...prev.slice(-19), duration]); 
-
-            addLog(LogLevel.INFO, `Successfully processed ${nextItem.file.name} - ${nextItem.taskType} in ${formatDuration(duration)}`);
-            
-            let prefix = 'Line-';
-            if (result.type === 'model') prefix = 'Line-Model-';
-            if (result.type === 'model-full') prefix = 'Line-Model-Full-';
-            if (result.type === 'background') prefix = 'Line-Background-';
-            if (result.type === 'backside') prefix = 'Line-Opposite-';
-            if (result.type === 'nude') prefix = 'Line-Nude-';
-            if (result.type === 'nude-opposite') prefix = 'Line-Nude-Opposite-';
-            
-            if (nextItem.personDescription) {
-                prefix += 'Person-';
-            }
-
-            triggerDownload(result.url, nextItem.file.name, prefix, 'png');
-
-      } catch (err: any) {
-        const errorMsg = err.message || 'Unknown error';
-        const newFailureCount = nextItem.retryCount + 1; 
-        const newHistory = [...nextItem.errorHistory, errorMsg];
-
-        addLog(LogLevel.WARN, `Job failed: ${nextItem.file.name} (${nextItem.taskType}). Failure #${newFailureCount}. Error: ${errorMsg}`);
-        
-        setQueue(prev => prev.map(i => i.id === nextItem.id ? { 
-          ...i, 
-          status: ProcessingStatus.ERROR, 
-          errorMessage: errorMsg,
-          retryCount: newFailureCount,
-          errorHistory: newHistory
-        } : i));
-        
-      } finally {
-        setProcessingCount(prev => prev - 1);
-        setProcessingStatus("");
+          const link = document.createElement('a');
+          link.href = res.url;
+          // Filename: Line-<Queue>-<Filename>.png
+          const baseName = job.file.name.substring(0, job.file.name.lastIndexOf('.')) || job.file.name;
+          link.download = `Line-${job.taskType}-${baseName}.png`;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          addLog(LogLevel.INFO, `Auto-downloaded result for ${job.file.name}`);
+      } catch (e) {
+          addLog(LogLevel.ERROR, `Failed to auto-download: ${e}`);
       }
-    };
+  };
 
-    processNext();
-  }, [queue, processingCount, isProcessingEnabled, addLog, gender, detailLevel]);
+  // --- Handlers ---
 
+  const handleRetryAll = () => {
+      setQueue(prev => prev.map(i => {
+          // Retry queue items (non-fatal errors)
+          if (i.status === ProcessingStatus.ERROR && !i.isBlocked && i.retryCount < 3) {
+              return { ...i, status: ProcessingStatus.PENDING };
+          }
+          return i;
+      }));
+  };
 
-  // --- Render ---
+  const handleRetryFailedQueue = () => {
+      setQueue(prev => prev.map(i => {
+          // Retry from Failed Queue (Last Chance items)
+          if (i.status === ProcessingStatus.ERROR && (i.isBlocked || (i.retryCount >= 3 && i.isLastChance))) {
+              return { ...i, status: ProcessingStatus.PENDING };
+          }
+          return i;
+      }));
+  };
+
+  const handleDeleteFailedQueue = () => {
+       setQueue(prev => prev.filter(i => !(i.status === ProcessingStatus.ERROR && (i.isBlocked || (i.retryCount >= 3 && i.isLastChance)))));
+  };
+
+  const handleDeleteEndedQueue = () => {
+      setQueue(prev => prev.filter(i => i.status !== ProcessingStatus.ENDED));
+  };
+
+  const handleRemoveAllRetry = () => {
+      setQueue(prev => prev.filter(i => !(i.status === ProcessingStatus.ERROR && !i.isBlocked && i.retryCount < 3)));
+  };
+
+  const handleRetryFailedItem = (id: string) => {
+      setQueue(prev => prev.map(i => {
+          if (i.id === id) {
+              // Retry Once: Keep isLastChance=true. If it fails again, handleJobError will kill it.
+              return { ...i, status: ProcessingStatus.PENDING }; 
+          }
+          return i;
+      }));
+  };
+  
+  const handleExport = async () => {
+      const exportData = { uploads: await Promise.all(uploads.map(async u => ({...u, data: await blobToBase64(u.file)}))), options };
+      const blob = new Blob([JSON.stringify(exportData)], {type: 'application/json'});
+      const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'lineartify_backup.json'; a.click();
+  };
+
+  const handleImport = (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if(!file) return;
+      const reader = new FileReader();
+      reader.onload = async (ev) => {
+          try {
+              const data = JSON.parse(ev.target?.result as string);
+              if (data.options) setOptions(data.options);
+              if (data.uploads) {
+                  const newUploads = await Promise.all(data.uploads.map(async (u: any) => {
+                      const res = await fetch(u.data);
+                      const blob = await res.blob();
+                      const file = new File([blob], u.file.name, { type: u.file.type });
+                      return { ...u, file, thumbnailUrl: URL.createObjectURL(file) };
+                  }));
+                  setUploads(prev => [...prev, ...newUploads]);
+                  populateQueues(newUploads);
+              }
+          } catch(err) { console.error(err); }
+      };
+      reader.readAsText(file);
+  };
+  
+  const handleApiKeyChange = async () => {
+      if ((window as any).aistudio?.openSelectKey) await (window as any).aistudio.openSelectKey();
+  };
+
+  const toggleQueueControl = (key: keyof typeof queueControls) => {
+      setQueueControls(prev => ({ ...prev, [key]: !prev[key] }));
+  };
+
+  const toggleSourceSelection = (sourceId: string) => {
+      setSelectedSourceIds(prev => {
+          const next = new Set(prev);
+          if (next.has(sourceId)) next.delete(sourceId);
+          else next.add(sourceId);
+          return next;
+      });
+  };
+
+  // Drag & Drop Handlers
+  const onDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(true);
+  };
+  const onDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+    setIsDragging(false);
+  };
+  const onDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    handleUpload(e.dataTransfer.files);
+  };
+
+  // Helper for Gallery Highlighting logic
+  const shouldHighlight = (taskType: TaskType) => {
+      // Map Active Queue View to TaskType for highlighting
+      switch (activeQueueView) {
+          case 'FULL': return taskType === 'full';
+          case 'BACKGROUND': return taskType === 'background';
+          case 'ALL_PEOPLE': return taskType === 'all-people';
+          case 'ALL_PEOPLE_NUDE': return taskType === 'all-people-nude';
+          case 'MODEL': return taskType === 'model';
+          case 'FACE': return taskType === 'face';
+          case 'BACKSIDE': return taskType === 'backside';
+          case 'NUDE': return taskType === 'nude';
+          case 'NUDE_OPPOSITE': return taskType === 'nude-opposite';
+          case 'MODEL_FULL': return taskType === 'model-full';
+          case 'UPSCALE': return taskType === 'upscale';
+          default: return false; 
+      }
+  };
 
   return (
     <div 
-      className="flex flex-col h-screen w-screen bg-[#0f0f16] text-slate-200 font-sans overflow-hidden relative"
-      onDragEnter={handleDragEnter}
-      onDragLeave={handleDragLeave}
-      onDragOver={handleDragOver}
-      onDrop={handleDrop}
-      onClick={() => isErrorDropdownOpen && setIsErrorDropdownOpen(false)}
+        className="flex flex-col h-screen w-screen bg-[#0f0f16] text-slate-200 font-sans overflow-hidden relative"
+        onDragOver={onDragOver}
+        onDragLeave={onDragLeave}
+        onDrop={onDrop}
     >
-      <input 
-        type="file" 
-        ref={fileInputRef}
-        onChange={handleImportQueue} 
-        accept=".klj" 
-        className="hidden" 
-      />
-
-      {/* Background Decor */}
-      <div className="absolute top-0 left-0 w-full h-full overflow-hidden pointer-events-none z-0">
-        <div className="absolute -top-[20%] -left-[10%] w-[50%] h-[50%] bg-indigo-900/20 rounded-full blur-[120px]"></div>
-        <div className="absolute top-[40%] right-[0%] w-[40%] h-[60%] bg-blue-900/10 rounded-full blur-[100px]"></div>
-      </div>
-
-      {/* Full Screen Drop Overlay */}
-      {isDraggingOver && (
-        <div className="absolute inset-4 z-50 rounded-3xl border-4 border-dashed border-indigo-500 bg-[#0f0f16]/90 backdrop-blur-md flex flex-col items-center justify-center animate-fade-in pointer-events-none">
-          <Upload className="w-24 h-24 text-indigo-400 mb-6 animate-bounce" />
-          <h2 className="text-4xl font-bold text-white tracking-tight">Drop images to process</h2>
-          <p className="text-slate-400 mt-2 font-mono">Will detect people and generate variations automatically</p>
-        </div>
+      {/* Drag Overlay */}
+      {isDragging && (
+          <div className="absolute inset-0 z-[100] bg-indigo-500/20 backdrop-blur-sm border-4 border-indigo-500 border-dashed flex items-center justify-center pointer-events-none">
+              <div className="text-4xl font-bold text-white drop-shadow-lg">Drop images to upload</div>
+          </div>
       )}
 
-      {/* Header Bar */}
-      <header className="relative z-20 flex-none h-16 border-b border-white/5 bg-[#181825]/80 backdrop-blur-md flex items-center justify-between px-6">
-        <div className="flex items-center space-x-3">
-          <div className="w-8 h-8 rounded bg-indigo-600 flex items-center justify-center">
-             <ImageIcon className="text-white w-5 h-5" />
-          </div>
-          <h1 className="text-xl font-bold tracking-tight text-white">LineArtify <span className="text-indigo-400 text-sm font-normal ml-1">Gemini Edition</span></h1>
-        </div>
-        
-        {/* Central Status Indicator & Timer */}
-        <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none flex flex-col items-center justify-center">
-          {processingStatus && (
-            <div className="flex items-center space-x-2 bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 px-4 py-1.5 rounded-full text-sm font-mono shadow-[0_0_15px_rgba(99,102,241,0.2)] animate-pulse mb-1">
-              <Brain size={16} className="animate-pulse" />
-              <span>{processingStatus}</span>
+      {/* --- HEADER --- */}
+      <header className="flex-none h-14 bg-[#181825] border-b border-white/5 flex items-center justify-between px-4 z-50">
+        <div className="flex items-center space-x-4">
+            <div className="flex items-center space-x-2">
+                <div className="w-8 h-8 bg-indigo-600 rounded flex items-center justify-center">
+                    <ImageIcon className="text-white w-5 h-5" />
+                </div>
+                <h1 className="font-bold text-lg tracking-tight">LineArtify</h1>
             </div>
-          )}
-          
-          {isProcessingEnabled && pendingCount > 0 && (
-             <div className="flex items-center space-x-1.5 text-xs text-indigo-300/80 font-mono bg-black/40 px-2 py-0.5 rounded-full backdrop-blur-sm border border-white/5 animate-fade-in">
-                <Clock size={10} />
-                <span>~{formatDuration(estimatedMs)} remaining</span>
-             </div>
-          )}
-        </div>
-
-        <div className="flex items-center space-x-3">
             
-            {/* Settings Group */}
-            <div className="flex items-center bg-slate-800/50 rounded-lg p-1 border border-white/5 space-x-3 px-3 mr-2">
-                
-                {/* Generation Type Selection */}
-                 <div className="flex items-center space-x-3 mr-2">
-                     <label className="flex items-center space-x-1.5 cursor-pointer" title="Select All">
-                        <input type="checkbox" checked={allSelected} onChange={toggleAll} className="accent-indigo-500 rounded w-3.5 h-3.5 cursor-pointer bg-slate-700 border-none" />
-                        <span className="text-xs font-bold text-slate-300">All</span>
-                     </label>
-                     <div className="w-px h-3 bg-white/10"></div>
-                     <label className="flex items-center space-x-1.5 cursor-pointer">
-                        <input type="checkbox" checked={taskSelection.full} onChange={() => toggleTask('full')} className="accent-indigo-500 rounded w-3.5 h-3.5 cursor-pointer bg-slate-700 border-none" />
-                        <span className="text-xs text-slate-400 hover:text-white">Full</span>
-                     </label>
-                     <label className="flex items-center space-x-1.5 cursor-pointer">
-                        <input type="checkbox" checked={taskSelection.model} onChange={() => toggleTask('model')} className="accent-indigo-500 rounded w-3.5 h-3.5 cursor-pointer bg-slate-700 border-none" />
-                        <span className="text-xs text-slate-400 hover:text-white">Char</span>
-                     </label>
-                     <label className="flex items-center space-x-1.5 cursor-pointer">
-                        <input type="checkbox" checked={taskSelection.background} onChange={() => toggleTask('background')} className="accent-indigo-500 rounded w-3.5 h-3.5 cursor-pointer bg-slate-700 border-none" />
-                        <span className="text-xs text-slate-400 hover:text-white">BG</span>
-                     </label>
-                     <label className="flex items-center space-x-1.5 cursor-pointer">
-                        <input type="checkbox" checked={taskSelection.backside} onChange={() => toggleTask('backside')} className="accent-indigo-500 rounded w-3.5 h-3.5 cursor-pointer bg-slate-700 border-none" />
-                        <span className="text-xs text-slate-400 hover:text-white">Op.</span>
-                     </label>
-                     <label className="flex items-center space-x-1.5 cursor-pointer">
-                        <input type="checkbox" checked={taskSelection.nude} onChange={() => toggleTask('nude')} className="accent-indigo-500 rounded w-3.5 h-3.5 cursor-pointer bg-slate-700 border-none" />
-                        <span className="text-xs text-slate-400 hover:text-white">Nude</span>
-                     </label>
-                     <label className="flex items-center space-x-1.5 cursor-pointer">
-                        <input type="checkbox" checked={taskSelection.nudeOpposite} onChange={() => toggleTask('nudeOpposite')} className="accent-indigo-500 rounded w-3.5 h-3.5 cursor-pointer bg-slate-700 border-none" />
-                        <span className="text-xs text-slate-400 hover:text-white">Nude Op.</span>
-                     </label>
-                 </div>
-
-                 <div className="w-px h-6 bg-white/10"></div>
-
-                {/* Gender Dropdown */}
-                <div className="flex items-center space-x-2">
-                    <Users size={16} className="text-slate-400" />
-                    <select 
-                        value={gender}
-                        onChange={(e) => setGender(e.target.value)}
-                        className="bg-transparent border-none text-sm text-slate-200 py-1.5 focus:ring-0 focus:outline-none cursor-pointer"
-                        title="Target Gender"
-                    >
-                        <option value="As-is">As-is</option>
-                        <option value="Female">Female</option>
-                        <option value="Male">Male</option>
-                        <option value="Intersex">Intersex</option>
-                    </select>
-                </div>
-
-                <div className="w-px h-4 bg-white/10"></div>
-
-                {/* Detail Slider */}
-                <div className="flex flex-col justify-center w-32 px-1">
-                     <div className="flex justify-between text-[8px] text-slate-400 font-mono uppercase mb-0.5">
-                        <span className={detailLevel === 'Low' ? 'text-indigo-400 font-bold' : ''}>Low</span>
-                        <span className={detailLevel === 'Medium' ? 'text-indigo-400 font-bold' : ''}>Med</span>
-                        <span className={detailLevel === 'High' ? 'text-indigo-400 font-bold' : ''}>High</span>
-                     </div>
-                     <div className="relative h-4 flex items-center">
-                         <input 
-                            type="range" 
-                            min="0" 
-                            max="2" 
-                            step="1"
-                            value={detailLevel === 'Low' ? 0 : detailLevel === 'High' ? 2 : 1}
-                            onChange={(e) => {
-                              const val = parseInt(e.target.value);
-                              setDetailLevel(val === 0 ? 'Low' : val === 2 ? 'High' : 'Medium');
-                            }}
-                            className="w-full h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-indigo-500 z-10"
-                            title={`Detail Level: ${detailLevel}`}
-                         />
-                         {/* Tick Marks */}
-                         <div className="absolute w-full flex justify-between px-1 pointer-events-none">
-                             <div className="w-1 h-1 bg-slate-500 rounded-full"></div>
-                             <div className="w-1 h-1 bg-slate-500 rounded-full"></div>
-                             <div className="w-1 h-1 bg-slate-500 rounded-full"></div>
-                         </div>
-                     </div>
-                </div>
-            </div>
-
-            <div className="h-6 w-px bg-white/10 mx-1"></div>
-
-            {/* Error Display Widget */}
-            {lastError && (
-              <div className="relative">
-                <button
-                  onClick={(e) => { e.stopPropagation(); setIsErrorDropdownOpen(!isErrorDropdownOpen); }}
-                  className="flex items-center space-x-2 px-3 py-1.5 rounded-md bg-red-900/20 border border-red-500/30 text-red-300 hover:bg-red-900/40 transition-colors text-xs font-mono max-w-[200px]"
-                >
-                  <AlertTriangle size={14} className="shrink-0" />
-                  <span className="truncate">{getErrorMessage(lastError)}</span>
-                  <ChevronDown size={12} className="shrink-0 opacity-50" />
-                </button>
-
-                {isErrorDropdownOpen && (
-                  <div className="absolute top-full right-0 mt-2 w-96 bg-[#1e1e2e] border border-slate-700 rounded-lg shadow-2xl z-50 overflow-hidden flex flex-col">
-                    <div className="bg-red-900/20 p-2 border-b border-white/5 text-xs font-bold text-red-300 flex items-center">
-                      <AlertCircle size={12} className="mr-2" /> Recent Errors
+            {/* PROGRESS BAR */}
+            {totalJobs > 0 && (
+                <div className="flex items-center space-x-3 bg-slate-800/50 px-3 py-1.5 rounded-full border border-white/5">
+                    <div className="w-32 h-2 bg-slate-700 rounded-full overflow-hidden">
+                        <div 
+                            className="h-full bg-emerald-500 transition-all duration-500 ease-out"
+                            style={{ width: `${progressPercent}%` }}
+                        ></div>
                     </div>
-                    <div className="max-h-60 overflow-y-auto">
-                      {uniqueErrors.map((err, idx) => (
-                        <div key={err.id} className="p-3 border-b border-white/5 hover:bg-white/5 text-xs font-mono text-slate-300 break-words">
-                          <div className="opacity-50 text-[10px] mb-1">{err.timestamp.toLocaleTimeString()}</div>
-                          {getErrorMessage(err)}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
+                    <span className="text-xs font-mono text-slate-400">
+                        {completedJobs} / {totalJobs} jobs completed
+                    </span>
+                </div>
             )}
-            
-            <div className="h-6 w-px bg-white/10 mx-2"></div>
-
-             {/* API Key Button */}
-            <button
-              onClick={handleApiKeyChange}
-              className="p-2 text-slate-400 hover:text-white hover:bg-white/10 rounded-lg transition-colors"
-              title="Set API Key"
-            >
-              <Key size={20} />
-            </button>
-            
-             {/* Import/Export Queue */}
-             <button
-              onClick={() => fileInputRef.current?.click()}
-              className="p-2 text-slate-400 hover:text-white hover:bg-white/10 rounded-lg transition-colors"
-              title="Load Queue (.klj)"
-            >
-              <FolderOpen size={20} />
-            </button>
-             <button
-              onClick={handleExportQueue}
-              className="p-2 text-slate-400 hover:text-white hover:bg-white/10 rounded-lg transition-colors"
-              title="Save Queue (.klj)"
-            >
-              <Save size={20} />
-            </button>
-
-             {/* Manual Button */}
-             <button
-              onClick={() => setIsManualOpen(true)}
-              className="flex items-center space-x-2 px-3 py-1.5 text-slate-400 hover:text-white hover:bg-white/10 rounded-lg transition-colors border border-transparent hover:border-white/5"
-              title="Open Manual"
-            >
-              <Book size={18} />
-              <span className="text-sm font-medium hidden lg:inline">Manual</span>
-            </button>
-
-            {/* Console Button */}
-            <button
-              onClick={() => setIsConsoleOpen(true)}
-              className="p-2 text-slate-400 hover:text-white hover:bg-white/10 rounded-lg transition-colors"
-              title="Open Console"
-            >
-              <Terminal size={20} />
-            </button>
-
-             {/* Start/Stop Button */}
-            <button
-              onClick={() => setIsProcessingEnabled(!isProcessingEnabled)}
-              className={`flex items-center space-x-2 px-4 py-1.5 rounded-full font-medium transition-all shadow-lg ml-2 text-sm ${
-                isProcessingEnabled 
-                  ? 'bg-red-500/10 text-red-400 hover:bg-red-500/20 border border-red-500/30' 
-                  : 'bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 border border-emerald-500/30'
-              }`}
-            >
-              {isProcessingEnabled ? (
-                <>
-                  <Pause size={16} className="fill-current" />
-                  <span>Stop</span>
-                </>
-              ) : (
-                <>
-                  <Play size={16} className="fill-current" />
-                  <span>Start</span>
-                </>
-              )}
-            </button>
         </div>
 
-        {/* Progress Bar (Attached to bottom of header) */}
-        {totalQueuedItems > 0 && (
-            <div className="absolute bottom-0 left-0 w-full h-1 bg-slate-800">
-                <div 
-                    className="h-full bg-gradient-to-r from-indigo-500 to-purple-500 transition-all duration-500 ease-out shadow-[0_0_10px_rgba(99,102,241,0.5)]"
-                    style={{ width: `${progressPercentage}%` }}
-                />
-            </div>
-        )}
+        <div className="flex items-center space-x-2">
+            <button onClick={() => setIsOptionsOpen(true)} className="flex items-center space-x-2 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 rounded text-sm transition-colors border border-white/5">
+                <Settings size={16} /> <span>Options</span>
+            </button>
+            <div className="w-px h-6 bg-white/10 mx-1"></div>
+            
+            <button onClick={() => toggleQueueControl('global')} className={`flex items-center space-x-2 px-4 py-1.5 rounded text-sm font-bold transition-all ${queueControls.global ? 'bg-red-500/20 text-red-400 border border-red-500/30' : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'}`}>
+                {queueControls.global ? <><Pause size={16} fill="currentColor" /><span>Stop</span></> : <><Play size={16} fill="currentColor" /><span>Start</span></>}
+            </button>
+
+            <div className="w-px h-6 bg-white/10 mx-1"></div>
+
+            <button onClick={handleExport} className="p-2 hover:bg-white/10 rounded text-slate-400 flex items-center space-x-2"><Save size={18} /><span className="text-xs">Save</span></button>
+            <button onClick={() => fileInputRef.current?.click()} className="p-2 hover:bg-white/10 rounded text-slate-400 flex items-center space-x-2"><FolderOpen size={18} /><span className="text-xs">Load</span></button>
+            <input type="file" ref={fileInputRef} className="hidden" accept=".json" onChange={handleImport} />
+
+            <div className="w-px h-6 bg-white/10 mx-1"></div>
+
+            <button onClick={() => setIsManualOpen(true)} className="p-2 hover:bg-white/10 rounded text-slate-400 flex items-center space-x-2"><Book size={18} /><span className="text-xs">Manual</span></button>
+            <button onClick={() => setIsConsoleOpen(true)} className="p-2 hover:bg-white/10 rounded text-slate-400 flex items-center space-x-2"><Terminal size={18} /><span className="text-xs">Console</span></button>
+            <button onClick={handleApiKeyChange} className="p-2 hover:bg-white/10 rounded text-slate-400 flex items-center space-x-2"><Key size={18} /><span className="text-xs">API Key</span></button>
+        </div>
       </header>
 
-      {/* Main Content Area */}
-      <div className="flex-1 flex min-h-0 p-4 gap-4 relative z-10">
+      {/* --- MAIN LAYOUT --- */}
+      <div className="flex-1 flex overflow-hidden">
         
-        {/* Left Column: Input Queue */}
-        <div className="w-96 flex flex-col glass-panel rounded-2xl overflow-hidden shadow-xl animate-fade-in-left flex-none">
-          <div className="p-4 border-b border-white/5 bg-white/5 flex items-center justify-between">
-            <h2 className="font-bold text-slate-100 flex items-center"><Upload className="mr-2 w-4 h-4 text-indigo-400" /> Input Queue</h2>
-            <div className="flex items-center space-x-2">
-                <span className="text-xs font-mono bg-indigo-500/20 text-indigo-300 px-2 py-0.5 rounded-full">{inputQueue.length}</span>
-                {inputQueue.length > 0 && (
-                  <div className="flex space-x-1">
-                      <button 
-                        onClick={handleClearGallery}
-                        title="Delete All Completed"
-                        className="p-1.5 text-slate-400 hover:text-emerald-400 hover:bg-emerald-500/10 rounded-md transition-colors"
-                      >
-                        <CheckCheck size={16} />
-                      </button>
-                      <button 
-                        onClick={handleClearInputQueue}
-                        title="Clean Queue (Pending)"
-                        className="p-1.5 text-slate-400 hover:text-red-400 hover:bg-red-500/10 rounded-md transition-colors"
-                      >
-                        <Trash2 size={16} />
-                      </button>
-                  </div>
-                )}
-            </div>
-          </div>
-          
-          <div className="flex-1 overflow-y-auto p-0 space-y-0 scrollbar-hide bg-slate-900/30">
-            {/* Visual Drop Area / Click to Upload */}
-            <div 
-              className="border-b border-dashed border-white/10 p-6 text-center transition-all hover:bg-white/5 group cursor-pointer relative"
-            >
-              <input 
-                type="file" 
-                multiple 
-                accept="image/*"
-                onChange={(e) => handleFiles(e.target.files)}
-                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" 
-              />
-              <div className="w-10 h-10 rounded-full bg-indigo-500/10 flex items-center justify-center mx-auto mb-2 group-hover:scale-110 transition-transform">
-                <Upload className="w-5 h-5 text-indigo-400" />
-              </div>
-              <p className="text-xs font-medium text-slate-400">Add more images</p>
-            </div>
+        {/* --- LEFT SIDEBAR (20vw) --- */}
+        <div className="w-[20vw] flex flex-col bg-[#13131f] border-r border-white/5 relative z-10">
+            {/* Queue Selector */}
+            <div className="p-3 border-b border-white/5">
+                <select 
+                    value={activeQueueView} 
+                    onChange={(e) => setActiveQueueView(e.target.value as QueueView)}
+                    className="w-full bg-slate-900 border border-slate-700 text-slate-200 rounded p-2 text-sm font-bold focus:ring-2 focus:ring-indigo-500 outline-none"
+                >
+                    <option value="UPLOADS">Uploads ({uploads.length})</option>
+                    <option value="JOBS">Jobs ({processingJobs.length})</option>
+                    <option disabled>--- Queues ---</option>
+                    <option value="FULL">Full Line Art</option>
+                    <option value="BACKGROUND">Background</option>
+                    <option value="ALL_PEOPLE">All People (Group)</option>
+                    <option value="ALL_PEOPLE_NUDE">All People Nude (Group)</option>
+                    <option value="COUNTING">Counting (Scanner)</option>
+                    <option disabled>--- Person Tasks ---</option>
+                    <option value="MODEL">Character</option>
+                    <option value="FACE">Face Portrait</option>
+                    <option value="BACKSIDE">Opposite View</option>
+                    <option value="NUDE">Nude</option>
+                    <option value="NUDE_OPPOSITE">Nude Opposite</option>
+                    <option value="MODEL_FULL">Body Reconstruction</option>
+                    <option disabled>--- Utility ---</option>
+                    <option value="UPSCALE">Upscale (4K)</option>
+                    <option disabled>--- Status ---</option>
+                    <option value="RETRY">Retry</option>
+                    <option value="FAILED">Failed / Blocked</option>
+                    <option value="ENDED">Ended</option>
+                </select>
 
-            {/* List with Grouping */}
-            {(Object.entries(
-                inputQueue.reduce((groups, item) => {
-                    const groupName = item.file.name;
-                    if (!groups[groupName]) groups[groupName] = [];
-                    groups[groupName].push(item);
-                    return groups;
-                }, {} as Record<string, QueueItem[]>)
-            ) as [string, QueueItem[]][]).map(([filename, items]) => (
-                <div key={filename} className="mb-4 bg-slate-900/50 border-y border-white/5">
-                    {/* Group Header */}
-                    <div className="px-3 py-1.5 text-xs font-bold text-indigo-200 bg-black/20 uppercase tracking-wider flex items-center border-b border-white/5">
-                        <Image size={10} className="mr-1.5 opacity-70" />
-                        {filename}
-                    </div>
-                    {/* Items */}
-                    {items.map((item, idx) => (
-                      <div 
-                        key={item.id} 
-                        className="flex flex-col border-b border-white/5 relative group bg-slate-900 last:border-0"
-                        onMouseEnter={() => item.status === ProcessingStatus.SUCCESS && setHighlightedId(item.id)}
-                        onMouseLeave={() => setHighlightedId(null)}
-                      >
-                        
-                        {/* Image Area - Full Width */}
-                        <div 
-                          className="w-full relative cursor-zoom-in group/image"
-                          onClick={() => setViewerItemId(item.id)}
-                        >
-                            <img 
-                              src={item.thumbnailUrl} 
-                              alt="Thumb" 
-                              className="w-full h-auto max-h-64 object-cover"
-                            />
-
-                            {/* Bounding Box Overlay for People */}
-                            {item.detectBox && (
-                              <div 
-                                className="absolute border-2 border-indigo-400 bg-indigo-500/10 z-10 pointer-events-none"
-                                style={{
-                                  top: `${item.detectBox[0] / 10}%`,
-                                  left: `${item.detectBox[1] / 10}%`,
-                                  height: `${(item.detectBox[2] - item.detectBox[0]) / 10}%`,
-                                  width: `${(item.detectBox[3] - item.detectBox[1]) / 10}%`,
-                                  boxShadow: '0 0 0 1px rgba(0,0,0,0.3), inset 0 0 10px rgba(99,102,241,0.2)'
-                                }}
-                              >
-                                <div className="absolute -top-5 left-0 bg-indigo-600 text-[9px] text-white px-1 rounded shadow-sm whitespace-nowrap">Target</div>
-                              </div>
-                            )}
-                            
-                            {/* Status Overlays */}
-                            {item.status === ProcessingStatus.PROCESSING && (
-                                <div className="absolute inset-0 bg-black/40 flex items-center justify-center backdrop-blur-sm z-20">
-                                    {item.taskType === 'scan-people' ? (
-                                        <ScanFace className="w-10 h-10 text-indigo-400 animate-pulse" />
-                                    ) : (
-                                        <RefreshCw className="w-10 h-10 text-indigo-400 animate-spin" />
-                                    )}
-                                </div>
-                            )}
-                            {item.status === ProcessingStatus.SUCCESS && (
-                              <div className="absolute inset-0 bg-emerald-500/10 flex items-center justify-center z-20 pointer-events-none">
-                                  <CheckCircle2 className="w-12 h-12 text-emerald-400 drop-shadow-lg" />
-                              </div>
-                            )}
-
-                            {/* Quick Delete Overlay */}
-                            <button 
-                                onClick={(e) => { e.stopPropagation(); handleDelete(item.id); }}
-                                className="absolute top-2 right-2 p-1.5 bg-black/50 hover:bg-red-500 hover:text-white rounded-full transition-all text-slate-300 opacity-0 group-hover:opacity-100 z-30"
-                                title="Delete from Queue"
-                            >
-                                <X size={14} />
-                            </button>
-                            
-                            {/* Zoom Hint */}
-                            <div className="absolute bottom-2 right-2 p-1.5 bg-black/40 text-white rounded text-xs opacity-0 group-hover/image:opacity-100 transition-opacity pointer-events-none z-20">
-                                <ZoomIn size={14} />
+                {/* Queue Specific Controls */}
+                <div className="flex items-center justify-between mt-3">
+                    {activeQueueView === 'UPLOADS' && (
+                        <div className="w-full flex items-center justify-center p-4 border-2 border-dashed border-white/10 rounded bg-white/5 hover:bg-white/10 cursor-pointer relative transition-colors">
+                            <input type="file" multiple accept="image/*" className="absolute inset-0 opacity-0 cursor-pointer" onChange={(e) => handleUpload(e.target.files)} />
+                            <div className="flex items-center space-x-2 text-sm text-slate-400 font-medium">
+                                <Upload size={16} /> <span>Add Images / Drag & Drop</span>
                             </div>
                         </div>
+                    )}
 
-                        {/* Content Area - Below Image */}
-                        <div className="flex flex-col p-3 bg-slate-800/20">
-                          <div className="flex justify-between items-start">
-                              <p className="text-sm font-medium text-slate-200 truncate pr-2" title={item.file.name}>{item.file.name}</p>
-                              
-                              {/* Priority Controls (Only for pending) */}
-                              {(item.status === ProcessingStatus.PENDING) && (
-                                  <div className="flex space-x-0.5 bg-slate-800 rounded-md border border-white/5 p-0.5">
-                                      <button onClick={() => handleReorder(item.id, 'top')} className="p-1 hover:bg-indigo-500/20 text-slate-500 hover:text-indigo-300 rounded" title="Move to Top"><ChevronsUp size={10} /></button>
-                                      <button onClick={() => handleReorder(item.id, 'up')} className="p-1 hover:bg-white/10 text-slate-500 hover:text-slate-300 rounded" title="Move Up"><ChevronUp size={10} /></button>
-                                      <button onClick={() => handleReorder(item.id, 'down')} className="p-1 hover:bg-white/10 text-slate-500 hover:text-slate-300 rounded" title="Move Down"><ChevronDown size={10} /></button>
-                                      <button onClick={() => handleReorder(item.id, 'bottom')} className="p-1 hover:bg-indigo-500/20 text-slate-500 hover:text-indigo-300 rounded" title="Move to Bottom"><ChevronsDown size={10} /></button>
-                                  </div>
-                              )}
-                          </div>
-                          
-                          <div className="flex flex-wrap gap-2 mt-2">
-                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase tracking-wide border self-start ${
-                                item.taskType === 'scan-people' ? 'bg-indigo-500/20 border-indigo-500/40 text-indigo-300' :
-                                item.taskType === 'model' ? 'bg-fuchsia-500/20 border-fuchsia-500/40 text-fuchsia-300' :
-                                item.taskType === 'nude' || item.taskType === 'nude-opposite' ? 'bg-rose-500/20 border-rose-500/40 text-rose-300' :
-                                'bg-slate-700 border-slate-600 text-slate-300'
-                            }`}>
-                                {getTaskLabel(item.taskType)}
-                            </span>
-                            
-                            {item.personDescription && (
-                                  <div className="flex items-center space-x-1.5 bg-indigo-500/10 px-2 py-0.5 rounded border border-indigo-500/20 max-w-full">
-                                    <User size={10} className="text-indigo-400 shrink-0" />
-                                    <span className="text-xs text-indigo-200 italic font-medium leading-tight truncate">{item.personDescription}</span>
-                                  </div>
-                              )}
-                          </div>
-
-                          <div className="mt-3 pt-2 border-t border-white/5 flex items-center justify-between">
-                            {item.status === ProcessingStatus.PROCESSING ? (
-                              <span className="text-xs text-amber-400 flex items-center animate-pulse">
-                                {item.taskType === 'scan-people' ? "Detecting people..." : "Generating..."}
-                              </span>
-                            ) : item.status === ProcessingStatus.SUCCESS ? (
-                              <div className="flex gap-2 w-full">
-                                    <button 
-                                      onClick={() => handleLocateInGallery(item.id)}
-                                      className="flex-1 py-1.5 px-2 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 text-xs uppercase font-bold rounded border border-emerald-500/20 transition-colors flex items-center justify-center"
-                                    >
-                                      <ArrowRightCircle size={12} className="mr-1.5" /> Locate
-                                    </button>
-                                    <button 
-                                      onClick={() => handleRetry(item.id)}
-                                      className="flex-1 py-1.5 px-2 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-300 text-xs uppercase font-bold rounded border border-indigo-500/20 transition-colors"
-                                    >
-                                      Rerun
-                                    </button>
-                              </div>
-                            ) : (
-                              <span className="text-xs text-slate-500 flex items-center">
-                                Waiting in queue...
-                              </span>
-                            )}
-                          </div>
+                    {(activeQueueView === 'FULL' || activeQueueView === 'BACKGROUND' || activeQueueView === 'ALL_PEOPLE' || activeQueueView === 'ALL_PEOPLE_NUDE' || activeQueueView === 'COUNTING' || 
+                      activeQueueView === 'MODEL' || activeQueueView === 'FACE' || activeQueueView === 'BACKSIDE' || activeQueueView === 'NUDE' || 
+                      activeQueueView === 'NUDE_OPPOSITE' || activeQueueView === 'MODEL_FULL' || activeQueueView === 'UPSCALE') && (
+                        <div className="w-full flex justify-between items-center bg-slate-800/50 p-2 rounded">
+                            <span className="text-xs font-mono uppercase text-slate-400">Queue Active</span>
+                            <button 
+                                onClick={() => {
+                                    if (activeQueueView === 'FULL') toggleQueueControl('full');
+                                    if (activeQueueView === 'BACKGROUND') toggleQueueControl('background');
+                                    if (activeQueueView === 'ALL_PEOPLE') toggleQueueControl('allPeople');
+                                    if (activeQueueView === 'ALL_PEOPLE_NUDE') toggleQueueControl('allPeopleNude');
+                                    if (activeQueueView === 'COUNTING') toggleQueueControl('counting');
+                                    if (activeQueueView === 'MODEL') toggleQueueControl('model');
+                                    if (activeQueueView === 'FACE') toggleQueueControl('face');
+                                    if (activeQueueView === 'BACKSIDE') toggleQueueControl('backside');
+                                    if (activeQueueView === 'NUDE') toggleQueueControl('nude');
+                                    if (activeQueueView === 'NUDE_OPPOSITE') toggleQueueControl('nudeOpposite');
+                                    if (activeQueueView === 'MODEL_FULL') toggleQueueControl('modelFull');
+                                    if (activeQueueView === 'UPSCALE') toggleQueueControl('upscale');
+                                }}
+                                className={`w-10 h-5 rounded-full relative transition-colors ${
+                                    (activeQueueView === 'FULL' && queueControls.full) || 
+                                    (activeQueueView === 'BACKGROUND' && queueControls.background) ||
+                                    (activeQueueView === 'ALL_PEOPLE' && queueControls.allPeople) ||
+                                    (activeQueueView === 'ALL_PEOPLE_NUDE' && queueControls.allPeopleNude) ||
+                                    (activeQueueView === 'COUNTING' && queueControls.counting) ||
+                                    (activeQueueView === 'MODEL' && queueControls.model) ||
+                                    (activeQueueView === 'FACE' && queueControls.face) ||
+                                    (activeQueueView === 'BACKSIDE' && queueControls.backside) ||
+                                    (activeQueueView === 'NUDE' && queueControls.nude) ||
+                                    (activeQueueView === 'NUDE_OPPOSITE' && queueControls.nudeOpposite) ||
+                                    (activeQueueView === 'MODEL_FULL' && queueControls.modelFull) ||
+                                    (activeQueueView === 'UPSCALE' && queueControls.upscale)
+                                    ? 'bg-emerald-500' : 'bg-slate-600'}`}
+                            >
+                                <div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full transition-transform ${
+                                     (activeQueueView === 'FULL' && queueControls.full) || 
+                                     (activeQueueView === 'BACKGROUND' && queueControls.background) ||
+                                     (activeQueueView === 'ALL_PEOPLE' && queueControls.allPeople) ||
+                                     (activeQueueView === 'ALL_PEOPLE_NUDE' && queueControls.allPeopleNude) ||
+                                     (activeQueueView === 'COUNTING' && queueControls.counting) ||
+                                     (activeQueueView === 'MODEL' && queueControls.model) ||
+                                     (activeQueueView === 'FACE' && queueControls.face) ||
+                                     (activeQueueView === 'BACKSIDE' && queueControls.backside) ||
+                                     (activeQueueView === 'NUDE' && queueControls.nude) ||
+                                     (activeQueueView === 'NUDE_OPPOSITE' && queueControls.nudeOpposite) ||
+                                     (activeQueueView === 'MODEL_FULL' && queueControls.modelFull) ||
+                                     (activeQueueView === 'UPSCALE' && queueControls.upscale)
+                                     ? 'translate-x-5.5 left-0.5' : 'translate-x-0.5 left-0.5'
+                                }`}></div>
+                            </button>
                         </div>
-                      </div>
-                    ))}
-                </div>
-            ))}
-          </div>
-        </div>
+                    )}
 
-        {/* Center Column: Results Gallery */}
-        <div className="flex-1 flex flex-col glass-panel rounded-2xl overflow-hidden shadow-xl min-w-0">
-           <div className="p-4 border-b border-white/5 bg-white/5 flex items-center justify-between">
-            <div className="flex items-center space-x-4">
-                <h2 className="font-bold text-slate-100 flex items-center"><ImageIcon className="mr-2 w-4 h-4 text-emerald-400" /> Gallery</h2>
-                
-                {/* Gallery Filter */}
-                <div className="flex items-center bg-slate-800/50 rounded-lg p-1 space-x-1 border border-white/5 overflow-x-auto max-w-lg scrollbar-hide">
-                    <button 
-                        onClick={() => setGalleryFilter('ALL')}
-                        className={`px-3 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap ${galleryFilter === 'ALL' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}
-                    >
-                        All
-                    </button>
-                    <button 
-                        onClick={() => setGalleryFilter('full')}
-                        className={`px-3 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap ${galleryFilter === 'full' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}
-                    >
-                        Full
-                    </button>
-                    <button 
-                        onClick={() => setGalleryFilter('model')}
-                        className={`px-3 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap ${galleryFilter === 'model' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}
-                    >
-                        Char
-                    </button>
-                     <button 
-                        onClick={() => setGalleryFilter('background')}
-                        className={`px-3 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap ${galleryFilter === 'background' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}
-                    >
-                        BG
-                    </button>
-                    <button 
-                        onClick={() => setGalleryFilter('backside')}
-                        className={`px-3 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap ${galleryFilter === 'backside' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}
-                    >
-                        Op. View
-                    </button>
-                    <button 
-                        onClick={() => setGalleryFilter('nude')}
-                        className={`px-3 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap ${galleryFilter === 'nude' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}
-                    >
-                        Pose
-                    </button>
+                    {activeQueueView === 'RETRY' && (
+                        <div className="flex gap-2 w-full">
+                            <button onClick={handleRetryAll} className="flex-1 py-1 bg-indigo-500/20 text-indigo-400 hover:bg-indigo-500/30 text-xs uppercase font-bold rounded">Retry All</button>
+                            <button onClick={handleRemoveAllRetry} className="flex-1 py-1 bg-red-500/20 text-red-400 hover:bg-red-500/30 text-xs uppercase font-bold rounded">Remove All</button>
+                        </div>
+                    )}
+
+                     {activeQueueView === 'FAILED' && (
+                        <div className="flex gap-2 w-full">
+                            <button onClick={handleRetryFailedQueue} className="flex-1 py-1 bg-indigo-500/20 text-indigo-400 hover:bg-indigo-500/30 text-xs uppercase font-bold rounded">Retry All</button>
+                            <button onClick={handleDeleteFailedQueue} className="flex-1 py-1 bg-red-500/20 text-red-400 hover:bg-red-500/30 text-xs uppercase font-bold rounded">Delete All</button>
+                        </div>
+                    )}
+
+                    {activeQueueView === 'ENDED' && (
+                        <div className="flex gap-2 w-full">
+                             <button onClick={handleDeleteEndedQueue} className="flex-1 py-1 bg-red-500/20 text-red-400 hover:bg-red-500/30 text-xs uppercase font-bold rounded">Delete All Ended</button>
+                        </div>
+                    )}
                 </div>
             </div>
 
-            <div className="flex items-center space-x-3">
-               {successQueue.length > 0 && (
-                 <button 
-                   onClick={handleClearGallery}
-                   title="Clear Gallery"
-                   className="p-1.5 text-slate-400 hover:text-white hover:bg-white/10 rounded-md transition-colors"
-                 >
-                   <Eraser size={16} />
-                 </button>
-               )}
-            </div>
-          </div>
-          
-          <div className="flex-1 overflow-y-auto p-6 bg-slate-900/40">
-            {filteredGallery.length === 0 ? (
-              <div className="h-full flex flex-col items-center justify-center text-slate-500 opacity-60">
-                <div className="w-24 h-24 rounded-full bg-slate-800 flex items-center justify-center mb-4">
-                  <Filter size={40} />
-                </div>
-                <p>No images found.</p>
-                <p className="text-sm">Try adjusting the filter or process more images.</p>
-              </div>
-            ) : (
-              <div className="columns-1 md:columns-2 lg:columns-3 xl:columns-4 gap-6">
-                {filteredGallery.map(item => {
-                  const result = item.result!;
-                  return (
-                    <div 
-                        key={item.id} 
-                        id={`gallery-item-${item.id}`}
-                        onClick={() => setViewerItemId(item.id)}
-                        className={`inline-block w-full group relative break-inside-avoid bg-white rounded-xl overflow-hidden shadow-lg transition-all border-4 border-white mb-6 scroll-mt-20 cursor-zoom-in ${
-                            highlightedId === item.id 
-                                ? 'ring-4 ring-indigo-500 scale-[1.02] shadow-2xl z-10' 
-                                : 'hover:scale-[1.02] hover:shadow-2xl'
-                        }`}
-                    >
-                      {/* Image Card with Max Height Constraint */}
-                      <div className="w-full flex justify-center bg-gray-50">
-                          <img 
-                            src={result.url} 
-                            alt="Result" 
-                            className="object-contain max-h-[40vh] w-auto max-w-full mx-auto" 
-                          />
-                      </div>
-                      
-                      {/* Type Badge */}
-                      <div className="absolute top-2 left-2 px-2 py-1 rounded bg-black/60 text-white text-[10px] uppercase font-bold tracking-wider backdrop-blur-sm flex items-center pointer-events-none">
-                        {result.type === 'full' && <Layers size={10} className="mr-1"/>}
-                        {result.type === 'model' && <User size={10} className="mr-1"/>}
-                        {result.type === 'model-full' && <Expand size={10} className="mr-1 text-yellow-300"/>}
-                        {result.type === 'background' && <Image size={10} className="mr-1"/>}
-                        {result.type === 'backside' && <Repeat size={10} className="mr-1 text-cyan-300"/>}
-                        {(result.type === 'nude' || result.type === 'nude-opposite') && <PersonStanding size={10} className="mr-1 text-rose-300"/>}
-                        {getTaskLabel(item.taskType)}
-                      </div>
+            {/* List */}
+            <div className="flex-1 overflow-y-auto p-3 space-y-3 scrollbar-hide">
+                {activeQueueView === 'UPLOADS' && uploads.map(upload => (
+                    <div key={upload.id} className="bg-slate-800 rounded-lg overflow-hidden border border-white/5 relative group flex flex-col">
+                        <div className="relative">
+                             <img src={upload.thumbnailUrl} alt="source" className="w-full h-auto opacity-70 group-hover:opacity-100 transition-opacity" />
+                             
+                             {/* Checkbox Overlay */}
+                             <div className="absolute top-2 left-2 z-20">
+                                 <button 
+                                    onClick={(e) => { e.stopPropagation(); toggleSourceSelection(upload.id); }}
+                                    className={`p-1 rounded bg-black/50 backdrop-blur transition-colors ${selectedSourceIds.has(upload.id) ? 'text-emerald-400' : 'text-slate-400 hover:text-white'}`}
+                                 >
+                                     {selectedSourceIds.has(upload.id) ? <CheckSquare size={20} /> : <Square size={20} />}
+                                 </button>
+                             </div>
 
-                      {/* Person Indicator Badge */}
-                      {item.personDescription && (
-                           <div className="absolute top-2 right-2 px-2 py-1 rounded bg-indigo-600/80 text-white text-[10px] font-bold backdrop-blur-sm pointer-events-none max-w-[150px] truncate">
-                              {item.personDescription}
-                           </div>
-                      )}
+                             <button onClick={() => deleteUpload(upload.id)} className="absolute top-2 right-2 p-1 bg-black/50 hover:bg-red-500 text-white rounded opacity-0 group-hover:opacity-100 transition-opacity z-20">
+                                <Trash2 size={14} />
+                             </button>
+                        </div>
+                        <div className="p-2">
+                            <p className="text-xs font-bold text-slate-200 truncate">{upload.file.name}</p>
+                            <p className="text-[10px] text-slate-500">{new Date(upload.timestamp).toLocaleTimeString()}</p>
+                        </div>
+                    </div>
+                ))}
 
-                      {/* Hover Overlay */}
-                      <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center space-y-3 pointer-events-none">
+                {activeQueueView !== 'UPLOADS' && getQueueItems(activeQueueView).map(item => (
+                     <div key={item.id} className="bg-slate-800 rounded-lg overflow-hidden border border-white/5 relative group">
+                        {/* Status Bar */}
+                        <div className={`h-1 w-full ${item.status === ProcessingStatus.PROCESSING ? 'bg-indigo-500 animate-pulse' : item.status === ProcessingStatus.ERROR ? 'bg-red-500' : item.status === ProcessingStatus.ENDED ? 'bg-slate-900' : 'bg-slate-600'}`}></div>
                         
-                        {/* Delete Button (Visible on Hover) */}
-                        <button 
-                            onClick={(e) => { e.stopPropagation(); handleDelete(item.id); }}
-                            className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded-full font-medium text-xs flex items-center transform translate-y-4 group-hover:translate-y-0 transition-transform pointer-events-auto shadow-xl delay-75"
-                        >
-                            <Trash2 size={14} className="mr-2" /> Delete
-                        </button>
-                      </div>
-                      
-                      {/* Source Filename Label */}
-                      <div className="absolute bottom-0 inset-x-0 bg-black/70 backdrop-blur text-white text-[10px] p-2 truncate text-center translate-y-full group-hover:translate-y-0 transition-transform pointer-events-none">
-                        {item.file.name}
-                        {item.personDescription && <span className="text-indigo-300 block text-[9px] mt-0.5">{item.personDescription}</span>}
-                      </div>
-                      
-                       {/* Always Visible Delete Button for Gallery (Small corner icon) */}
-                        <button 
-                            onClick={(e) => { e.stopPropagation(); handleDelete(item.id); }}
-                            className="absolute bottom-2 right-2 p-1.5 bg-red-600/90 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity pointer-events-auto z-10"
-                            title="Delete"
-                        >
-                            <Trash2 size={12} />
-                        </button>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
+                        <div className="relative">
+                            <img src={item.thumbnailUrl} alt="job" className="w-full h-auto opacity-80" />
+                            
+                             {/* Checkbox Overlay for Jobs too (links to source) */}
+                             <div className="absolute top-2 left-2 z-20">
+                                 <button 
+                                    onClick={(e) => { e.stopPropagation(); toggleSourceSelection(item.sourceId); }}
+                                    className={`p-1 rounded bg-black/50 backdrop-blur transition-colors ${selectedSourceIds.has(item.sourceId) ? 'text-emerald-400' : 'text-slate-400 hover:text-white'}`}
+                                 >
+                                     {selectedSourceIds.has(item.sourceId) ? <CheckSquare size={20} /> : <Square size={20} />}
+                                 </button>
+                             </div>
+
+                            {item.status === ProcessingStatus.PROCESSING && (
+                                <div className="absolute inset-0 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+                                    <RefreshCw className="text-indigo-400 animate-spin" size={32} />
+                                </div>
+                            )}
+                            {item.detectBox && (
+                                <div className="absolute border-2 border-indigo-500/50" style={{
+                                    top: `${item.detectBox[0]/10}%`, left: `${item.detectBox[1]/10}%`,
+                                    height: `${(item.detectBox[2]-item.detectBox[0])/10}%`, width: `${(item.detectBox[3]-item.detectBox[1])/10}%`
+                                }}></div>
+                            )}
+                        </div>
+                        
+                        <div className="p-3">
+                            <div className="flex justify-between items-start">
+                                <div>
+                                    <p className="text-xs font-bold text-slate-200 uppercase">{item.taskType}</p>
+                                    <p className="text-[10px] text-slate-400 truncate w-48">{item.file.name}</p>
+                                    {item.personDescription && <p className="text-[10px] text-indigo-300 italic">{item.personDescription}</p>}
+                                </div>
+                                {item.retryCount > 0 && <span className="text-[10px] bg-red-900/50 text-red-300 px-1 rounded">{item.retryCount} Retries</span>}
+                            </div>
+                            
+                            {item.errorMessage && (
+                                <div className="mt-2 p-1.5 bg-red-900/20 border border-red-500/20 rounded text-[10px] text-red-300 font-mono">
+                                    {item.errorMessage}
+                                </div>
+                            )}
+
+                            {/* Buttons for Failed/Retry items inside sidebar */}
+                            {(item.status === ProcessingStatus.ERROR || activeQueueView === 'FAILED' || activeQueueView === 'RETRY') && (
+                                <div className="flex gap-2 mt-2">
+                                     <button 
+                                        onClick={() => handleRetryFailedItem(item.id)} 
+                                        className="flex-1 py-1 bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-300 text-[10px] uppercase font-bold rounded flex items-center justify-center gap-1"
+                                    >
+                                        <RefreshCcw size={10} /> Retry
+                                    </button>
+                                     <button 
+                                        onClick={() => deleteJob(item.id)} 
+                                        className="flex-1 py-1 bg-red-500/20 hover:bg-red-500/30 text-red-300 text-[10px] uppercase font-bold rounded flex items-center justify-center gap-1"
+                                    >
+                                        <Trash2 size={10} /> Delete
+                                    </button>
+                                </div>
+                            )}
+                        </div>
+                         {/* Fallback delete for regular items */}
+                         {!item.errorMessage && (
+                            <button onClick={() => deleteJob(item.id)} className="absolute top-2 right-2 p-1 bg-black/50 hover:bg-red-500 text-white rounded opacity-0 group-hover:opacity-100 transition-opacity z-20">
+                                <Trash2 size={14} />
+                            </button>
+                         )}
+                     </div>
+                ))}
+            </div>
         </div>
 
-        {/* Right Column: Error Queue */}
-        <div className="w-80 flex flex-col glass-panel rounded-2xl overflow-hidden shadow-xl animate-fade-in-right flex-none">
-           <div className="p-4 border-b border-white/5 bg-white/5 flex items-center justify-between">
-            <h2 className="font-bold text-slate-100 flex items-center"><AlertCircle className="mr-2 w-4 h-4 text-red-400" /> Error Queue</h2>
-             <span className="text-xs font-mono bg-red-500/20 text-red-300 px-2 py-0.5 rounded-full">{errorQueue.length}</span>
-          </div>
-          
-          {/* Retry/Delete All Header */}
-          {errorQueue.length > 0 && (
-             <div className="px-3 py-2 bg-red-500/5 border-b border-red-500/10 flex space-x-2">
-                <button 
-                  onClick={handleRetryAll}
-                  className="flex-1 py-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-300 text-xs font-bold uppercase tracking-wider rounded border border-red-500/20 transition-colors flex items-center justify-center"
-                >
-                  <RefreshCw size={12} className="mr-2" /> Retry Valid
-                </button>
-                <button 
-                  onClick={handleDeleteNoPeopleErrors}
-                  className="w-8 py-1.5 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-300 text-xs font-bold uppercase tracking-wider rounded border border-indigo-500/20 transition-colors flex items-center justify-center"
-                  title="Delete 'No People' Errors"
-                >
-                  <UserX size={12} />
-                </button>
-                <button 
-                  onClick={handleDeleteAllErrors}
-                  className="w-8 py-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-300 text-xs font-bold uppercase tracking-wider rounded border border-red-500/20 transition-colors flex items-center justify-center"
-                  title="Delete All Errors"
-                >
-                  <Trash2 size={12} />
-                </button>
-             </div>
-          )}
-
-          <div className="flex-1 overflow-y-auto p-0 space-y-0 scrollbar-hide bg-slate-900/30">
-             {errorQueue.length === 0 && (
-               <div className="mt-10 text-center text-slate-600 text-sm p-4">
-                 <div className="inline-block p-3 rounded-full bg-slate-800/50 mb-2">
-                   <CheckCircle2 size={20} className="text-emerald-500/50" />
-                 </div>
-                 <p>All systems normal.</p>
-               </div>
-             )}
-             
-             {errorQueue.map(item => (
-               <div key={item.id} className="bg-red-900/10 border-b border-red-500/10 flex flex-col relative group">
-                 {/* Image - Full Width */}
-                 <div 
-                   onClick={() => setViewerItemId(item.id)}
-                   className="w-full h-48 relative cursor-zoom-in overflow-hidden"
-                 >
-                    <img src={item.thumbnailUrl} alt="Thumb" className="w-full h-full object-cover opacity-80 hover:opacity-100 transition-opacity" />
-                    <div className="absolute top-1 right-1 bg-black/60 text-white text-[10px] px-1.5 py-0.5 rounded backdrop-blur-sm">
-                       Failures: {item.retryCount}
-                    </div>
+        {/* --- MAIN CONTENT (80vw) --- */}
+        <div className="w-[80vw] h-full flex flex-col bg-[#0f0f16] relative">
+            {/* Gallery Area */}
+            <div className="flex-1 overflow-y-auto p-8">
+                 <div className="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-8">
+                     {galleryItems.map(item => (
+                         <div key={item.id} className="flex flex-col group animate-fade-in">
+                             <div 
+                                className={`relative bg-[#1e1e1e] rounded-t-xl overflow-hidden cursor-zoom-in border border-b-0 transition-all duration-300 ${shouldHighlight(item.taskType) ? 'border-emerald-500 ring-4 ring-emerald-500/30' : 'border-white/5'}`}
+                                onClick={() => setViewerItemId(item.id)}
+                                style={{ height: '400px', borderWidth: shouldHighlight(item.taskType) ? '0px' : '1px' }}
+                             >
+                                 <div className="absolute inset-0 flex items-center justify-center bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-5"></div>
+                                 <img 
+                                    src={item.result?.url} 
+                                    alt="Result" 
+                                    className="w-full h-full object-contain p-4 transition-transform duration-300 group-hover:scale-105" 
+                                 />
+                                 
+                                 {/* Highlight Border Overlay if Active */}
+                                 {shouldHighlight(item.taskType) && (
+                                     <div className="absolute inset-0 border-[8px] border-emerald-500 pointer-events-none rounded-t-lg z-10"></div>
+                                 )}
+                                 
+                                 {/* Overlay Tags */}
+                                 <div className="absolute top-3 left-3 flex flex-col items-start gap-1 z-20">
+                                     <span className={`px-2 py-1 backdrop-blur-md text-white text-[10px] font-bold uppercase rounded tracking-wider ${shouldHighlight(item.taskType) ? 'bg-emerald-600' : 'bg-black/60'}`}>
+                                        {item.taskType}
+                                     </span>
+                                     {item.personDescription && (
+                                         <span className="px-2 py-1 bg-indigo-600/80 backdrop-blur-md text-white text-[10px] rounded max-w-[150px] truncate">
+                                            {item.personDescription}
+                                         </span>
+                                     )}
+                                 </div>
+                             </div>
+                             
+                             {/* Actions Footer */}
+                             <div className={`h-12 bg-slate-800 rounded-b-xl flex divide-x divide-white/10 ${shouldHighlight(item.taskType) ? 'border-x-[8px] border-b-[8px] border-emerald-500' : 'border border-white/5'}`}>
+                                 <button 
+                                    onClick={() => handleUpscale(item)}
+                                    className="flex-1 flex items-center justify-center space-x-2 text-xs font-bold text-slate-300 hover:bg-white/5 hover:text-white transition-colors"
+                                    title="Upscale to 4K"
+                                 >
+                                    <Wand2 size={14} className="text-purple-400" /> <span>Upscale</span>
+                                 </button>
+                                 <button 
+                                    onClick={() => repeatJob(item)}
+                                    className="flex-1 flex items-center justify-center space-x-2 text-xs font-bold text-slate-300 hover:bg-white/5 hover:text-white transition-colors"
+                                 >
+                                    <Repeat size={14} /> <span>Repeat</span>
+                                 </button>
+                                 <button 
+                                    onClick={() => deleteJob(item.id)}
+                                    className="flex-1 flex items-center justify-center space-x-2 text-xs font-bold text-slate-300 hover:bg-red-500/20 hover:text-red-400 transition-colors"
+                                 >
+                                    <Trash2 size={14} /> <span>Delete</span>
+                                 </button>
+                             </div>
+                         </div>
+                     ))}
                  </div>
                  
-                 <div className="flex flex-col p-3">
-                    <p className="text-sm font-medium text-slate-200 truncate">{item.file.name}</p>
-                    <p className="text-xs text-indigo-300 font-medium truncate mt-0.5">{getTaskLabel(item.taskType)}</p>
-                    <p className="text-xs text-red-300 mt-2 line-clamp-2 bg-red-900/20 p-2 rounded border border-red-500/10 font-mono leading-relaxed">{item.errorMessage}</p>
-                 </div>
-                 
-                 <div className="flex space-x-2 px-3 pb-3">
-                   <button 
-                    onClick={() => handleRetry(item.id)}
-                    disabled={item.retryCount >= MAX_RETRY_LIMIT}
-                    className={`flex-1 py-1.5 px-3 rounded text-xs font-medium transition-colors flex items-center justify-center border ${
-                        item.retryCount >= MAX_RETRY_LIMIT 
-                        ? 'bg-white/5 border-transparent text-slate-500 cursor-not-allowed' 
-                        : 'bg-white/5 hover:bg-white/10 border-white/10 text-slate-200'
-                    }`}
-                   >
-                     <RefreshCw size={12} className="mr-1.5" /> 
-                     {item.retryCount >= MAX_RETRY_LIMIT ? "Limit" : "Retry"}
-                   </button>
-                   <button 
-                    onClick={() => handleDelete(item.id)}
-                    className="w-8 py-1.5 bg-red-500/10 hover:bg-red-500/20 rounded text-xs font-medium text-red-300 transition-colors flex items-center justify-center border border-red-500/20"
-                    title="Dismiss"
-                   >
-                     <X size={12} />
-                   </button>
-                 </div>
-               </div>
-             ))}
-          </div>
+                 {galleryItems.length === 0 && (
+                     <div className="h-full flex flex-col items-center justify-center text-slate-600 pointer-events-none">
+                         <Layers size={64} className="mb-4 opacity-20" />
+                         <p className="text-lg font-medium">
+                            {selectedSourceIds.size > 0 ? "No results for selected images" : "Gallery is empty"}
+                         </p>
+                         <p className="text-sm">Processed images will appear here.</p>
+                     </div>
+                 )}
+            </div>
         </div>
-
       </div>
 
-      {/* Modals */}
+      {/* --- MODALS --- */}
       <Console isOpen={isConsoleOpen} onClose={() => setIsConsoleOpen(false)} />
       <ManualDialog isOpen={isManualOpen} onClose={() => setIsManualOpen(false)} />
-      {activeViewerItem && (
-          <ImageViewer 
-              item={activeViewerItem} 
-              onClose={() => setViewerItemId(null)} 
-              onNext={() => viewerIndex < viewerList.length - 1 && setViewerItemId(viewerList[viewerIndex + 1].id)}
-              onPrev={() => viewerIndex > 0 && setViewerItemId(viewerList[viewerIndex - 1].id)}
-              hasNext={viewerIndex < viewerList.length - 1}
-              hasPrev={viewerIndex > 0}
-          />
-      )}
+      <OptionsDialog isOpen={isOptionsOpen} onClose={() => setIsOptionsOpen(false)} options={options} setOptions={setOptions} />
+      
+      {viewerItemId && (() => {
+          const item = queue.find(i => i.id === viewerItemId) || uploads.find(u => u.id === viewerItemId) as any;
+          return item ? (
+            <ImageViewer 
+                item={item} 
+                onClose={() => setViewerItemId(null)} 
+                hasNext={false} hasPrev={false}
+            />
+          ) : null;
+      })()}
 
     </div>
   );
