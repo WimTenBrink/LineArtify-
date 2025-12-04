@@ -1,6 +1,7 @@
 
-import React, { useState } from 'react';
-import { X, Layers, User, Settings } from 'lucide-react';
+
+import React, { useState, useRef } from 'react';
+import { X, Layers, User, Settings, RotateCcw, Save, Upload, Download } from 'lucide-react';
 import { AppOptions, TaskType } from '../types';
 import { TASK_DEFINITIONS } from '../services/taskDefinitions';
 
@@ -13,6 +14,7 @@ interface OptionsDialogProps {
 
 const OptionsDialog: React.FC<OptionsDialogProps> = ({ isOpen, onClose, options, setOptions }) => {
   const [activeTab, setActiveTab] = useState<number>(0);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   if (!isOpen) return null;
 
@@ -21,6 +23,69 @@ const OptionsDialog: React.FC<OptionsDialogProps> = ({ isOpen, onClose, options,
       ...prev,
       taskTypes: { ...prev.taskTypes, [key]: !prev.taskTypes[key] }
     }));
+  };
+
+  const DEFAULT_OPTIONS: AppOptions = {
+    taskTypes: {
+      full: true,
+      background: true,
+      allPeople: true,
+      allPeopleNude: true,
+      model: true,
+      backside: true,
+      nude: true,
+      nudeOpposite: true,
+      modelFull: true,
+      face: true,
+      faceLeft: true,
+      faceRight: true,
+      neutral: true,
+      neutralNude: true,
+      upscale: false
+    },
+    gender: 'As-is',
+    detailLevel: 'Medium'
+  };
+
+  const handleRestoreDefaults = () => {
+    if (window.confirm('Are you sure you want to restore default settings?')) {
+      setOptions(DEFAULT_OPTIONS);
+    }
+  };
+
+  const handleSaveConfig = () => {
+    const blob = new Blob([JSON.stringify(options, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'lineartify_config.klc';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleLoadConfig = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const result = ev.target?.result as string;
+        const parsed = JSON.parse(result);
+        if (parsed && parsed.taskTypes) {
+           setOptions(parsed);
+           alert('Configuration loaded successfully.');
+        } else {
+           alert('Invalid configuration file.');
+        }
+      } catch (err) {
+        console.error(err);
+        alert('Failed to load configuration.');
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = ''; // Reset
   };
 
   const detailLevels = ['Very Low', 'Low', 'Medium', 'High', 'Very High'];
@@ -33,10 +98,10 @@ const OptionsDialog: React.FC<OptionsDialogProps> = ({ isOpen, onClose, options,
   // Group definitions by category
   const sceneTasks = Object.values(TASK_DEFINITIONS).filter(t => t.category === 'Scene' || t.category === 'Group');
   const personTasks = Object.values(TASK_DEFINITIONS).filter(t => t.category === 'Person');
+  const utilityTasks = Object.values(TASK_DEFINITIONS).filter(t => t.category === 'Utility' && t.id !== 'scan-people');
 
   // Helper to map TaskDef ID to Options Key (converting kebab-case to camelCase for legacy options keys if needed)
-  // Or ensuring keys match. In AppOptions, we have: full, background, allPeople, allPeopleNude, model, backside, nude, nudeOpposite, modelFull, face
-  // We need to map task IDs to these keys.
+  // Or ensuring keys match. In AppOptions, we have: full, background, allPeople, allPeopleNude, model, backside, nude, nudeOpposite, modelFull, face, upscale
   const taskKeyMap: Record<string, keyof AppOptions['taskTypes']> = {
       'full': 'full',
       'background': 'background',
@@ -44,10 +109,15 @@ const OptionsDialog: React.FC<OptionsDialogProps> = ({ isOpen, onClose, options,
       'all-people-nude': 'allPeopleNude',
       'model': 'model',
       'face': 'face',
+      'face-left': 'faceLeft',
+      'face-right': 'faceRight',
+      'neutral': 'neutral',
+      'neutral-nude': 'neutralNude',
       'model-full': 'modelFull',
       'backside': 'backside',
       'nude': 'nude',
       'nude-opposite': 'nudeOpposite',
+      'upscale': 'upscale'
   };
 
   return (
@@ -127,6 +197,19 @@ const OptionsDialog: React.FC<OptionsDialogProps> = ({ isOpen, onClose, options,
                     })}
                  </div>
               </section>
+
+              <section>
+                 <h3 className="text-sm font-bold text-indigo-400 uppercase tracking-widest mb-6 border-b border-white/10 pb-2">Utility</h3>
+                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <label className="flex items-start p-4 bg-slate-800/50 rounded-xl cursor-pointer hover:bg-slate-800 border border-white/5 transition-colors">
+                        <input type="checkbox" checked={options.taskTypes.upscale} onChange={() => toggleTask('upscale')} className="mt-1 accent-indigo-500 w-5 h-5" />
+                        <div className="ml-4">
+                            <span className="block font-medium text-white">Upscale 4K</span>
+                            <span className="block text-xs text-slate-400 mt-1">Automatically upscale all generated images to 4K resolution using Gemini 3 Pro.</span>
+                        </div>
+                    </label>
+                 </div>
+              </section>
             </div>
           )}
 
@@ -147,7 +230,7 @@ const OptionsDialog: React.FC<OptionsDialogProps> = ({ isOpen, onClose, options,
                             onChange={(e) => setOptions(prev => ({...prev, gender: e.target.value}))}
                             className="accent-indigo-500 w-6 h-6"
                         />
-                        <span className={`text-lg font-medium ${options.gender === g ? 'text-indigo-300' : 'text-slate-300'}`}>{g}</span>
+                        <span className="text-lg font-medium text-slate-300">{g}</span>
                     </label>
                  ))}
               </div>
@@ -195,7 +278,21 @@ const OptionsDialog: React.FC<OptionsDialogProps> = ({ isOpen, onClose, options,
         </div>
 
         {/* Footer */}
-        <div className="p-6 bg-slate-900/50 border-t border-slate-700 flex justify-end shrink-0">
+        <div className="p-6 bg-slate-900/50 border-t border-slate-700 flex justify-between shrink-0">
+            <div className="flex space-x-3">
+                 <button onClick={handleRestoreDefaults} className="p-2 hover:bg-white/10 rounded-lg text-slate-400 hover:text-white transition-colors" title="Restore Defaults">
+                    <RotateCcw size={20} />
+                </button>
+                <div className="w-px h-full bg-slate-700 mx-2"></div>
+                <button onClick={handleSaveConfig} className="p-2 hover:bg-white/10 rounded-lg text-slate-400 hover:text-white transition-colors" title="Save Config (.klc)">
+                    <Download size={20} />
+                </button>
+                <button onClick={() => fileInputRef.current?.click()} className="p-2 hover:bg-white/10 rounded-lg text-slate-400 hover:text-white transition-colors" title="Load Config (.klc)">
+                    <Upload size={20} />
+                </button>
+                <input type="file" ref={fileInputRef} hidden accept=".klc" onChange={handleLoadConfig} />
+            </div>
+
             <button onClick={onClose} className="px-8 py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-bold text-lg transition-colors shadow-lg">
                 Done
             </button>

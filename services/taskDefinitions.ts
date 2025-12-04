@@ -1,4 +1,5 @@
 
+
 import { TaskType } from '../types';
 
 export interface TaskDefinition {
@@ -29,13 +30,14 @@ const strictPoseInstruction = `
     - Do not halluncinate new gestures.
 `;
 const cyberneticInstruction = "CYBERNETICS: If the subject has cybernetic limbs, prosthetics, or mechanical body parts, PRESERVE THEM EXACTLY. Do not convert them to biological skin. Treat them as part of the subject's anatomy.";
+const fullBodyInstruction = "FULL BODY REQUIREMENT: You MUST generate the COMPLETE figure from head to toe. If the legs or feet are cut off in the source image, you MUST invent/reconstruct them naturally to show the full standing or sitting pose.";
 
 const getDetailInstruction = (level: string) => {
     switch (level) {
         case 'Very Low': return "DETAIL LEVEL: VERY LOW / ABSTRACT. Ultra-minimalist. Use only the absolute most essential lines to define the form. Create a highly stylized, abstract, or icon-like representation.";
         case 'Low': return "DETAIL LEVEL: LOW / SIMPLIFIED. Use fewer lines. Focus on the main silhouette and major shapes. Omit fine textures, small folds, and minor details. Create a clean, minimalist look.";
         case 'High': return "DETAIL LEVEL: HIGH / INTRICATE. Maximize detail. Capture every texture, fold, strand of hair, and surface nuance. Use intricate linework. Create a dense, highly detailed illustration.";
-        case 'Very High': return "DETAIL LEVEL: VERY HIGH / HYPER-REALISTIC. Extreme detail. Capture micro-textures, individual fabric threads, pores, and subtle surface imperfections. Use advanced linework techniques like cross-hatching for texture. Masterpiece quality.";
+        case 'Very High': return "DETAIL LEVEL: VERY HIGH / HYPER-REALISTIC. Extreme detail. Capture micro-textures, individual fabric threads, pores, and extreme texture density. Masterpiece quality.";
         default: return "DETAIL LEVEL: MEDIUM / BALANCED. Capture essential details while maintaining clarity. Standard professional line art.";
     }
 };
@@ -119,6 +121,7 @@ export const TASK_DEFINITIONS: Record<TaskType, TaskDefinition> = {
       - ${allAgesInstruction}
       - ${getGenderInstruction(gender)}
       - ${bodyTypeInstruction}
+      - ${fullBodyInstruction}
   
       Technical Requirements:
       - ${orientationInstruction}
@@ -141,11 +144,11 @@ export const TASK_DEFINITIONS: Record<TaskType, TaskDefinition> = {
   
       CRITICAL REQUIREMENTS:
       - Isolate ALL distinct human subjects.
-      - CLOTHING: REMOVE ALL CLOTHING. Draw the bare skin surface and muscle structure for every person.
+      - CLOTHING: ABSOLUTELY NO CLOTHING LINES. Remove all clothes. Draw only the bare skin surface and muscle structure. 
       - ${cyberneticInstruction}
-      - SAFETY/MODESTY: Artistic anatomy study. DO NOT draw explicit genitalia or sexual features. Use "Barbie/Ken doll" smooth surfaces.
+      - SAFETY/MODESTY: Artistic anatomy study. DO NOT draw explicit genitalia or sexual features. Use "Barbie/Ken doll" smooth surfaces. Keep the naughty bits hidden.
       - POSE: Copy the EXACT poses and interactions of the group.
-      - FULL BODY: If feet/legs are cropped, reconstruct them to show full figures.
+      - ${fullBodyInstruction}
   
       Context:
       - ${getDetailInstruction(detailLevel)}
@@ -188,28 +191,136 @@ export const TASK_DEFINITIONS: Record<TaskType, TaskDefinition> = {
       Content:
       - Isolate the character completely.
       - ${strictPoseInstruction}
+      - ${fullBodyInstruction}
       - CLOTHING REMOVAL / SIMPLIFICATION: Focus on the BODY CONTOUR and ANATOMICAL STRUCTURE. 
       - Treat clothing as minimal or non-existent to reveal the pose (like a drawing base mesh or mannequin). 
       - Do NOT draw detailed clothing patterns or textures.
-      - Maintain modesty (smooth mannequin surface) where appropriate, but ensure the limb structure and pose are perfectly clear for sketching reference.
     `
   },
   'face': {
     id: 'face',
     label: 'Face Portrait',
-    description: 'Detailed headshot/face line art.',
+    description: 'Frontal headshot/face line art.',
     category: 'Person',
     defaultEnabled: true,
     prompt: ({ detailLevel, gender, personDescription }) => `
       You are an expert portrait artist.
-      Task: Create a highly detailed line art portrait of the subject's FACE/HEAD.
+      Task: Create a highly detailed FRONTAL VIEW line art portrait of the subject's FACE/HEAD.
       
       CRITICAL REQUIREMENTS:
       - ${getTargetInstruction(personDescription)}
+      - VIEWPOINT: Transform the angle to be a direct FRONTAL VIEW (Passport photo style). If the subject is looking to the side, rotate the head in your drawing to face FORWARD.
       - CROP/FOCUS: Zoom in and focus strictly on the head, face, and immediate neck/shoulder area.
+      - NO CLOTHING: Draw the neck and shoulders as bare skin or a smooth mannequin form. Do not draw collars, hoods, shirts, or any clothing lines.
       - DETAIL: High detail on facial features (eyes, eyelashes, eyebrows, lips, nose contour) and hair.
       - ${getGenderInstruction(gender)}
       - ${getDetailInstruction(detailLevel)}
+      
+      Technical Requirements:
+      - ${orientationInstruction}
+      - Output: PNG image with a SOLID WHITE background.
+      - ${styleInstruction}
+      - Background: Pure White (#FFFFFF).
+    `
+  },
+  'face-left': {
+    id: 'face-left',
+    label: 'Face Left Side',
+    description: 'Left profile portrait.',
+    category: 'Person',
+    defaultEnabled: true,
+    prompt: ({ detailLevel, gender, personDescription }) => `
+      You are an expert portrait artist.
+      Task: Create a highly detailed LEFT PROFILE line art portrait of the subject's FACE/HEAD.
+      
+      CRITICAL REQUIREMENTS:
+      - ${getTargetInstruction(personDescription)}
+      - VIEWPOINT: Transform the angle to be a LEFT PROFILE VIEW (Subject looking to the left side of the canvas).
+      - CROP/FOCUS: Zoom in and focus strictly on the head, face, and neck.
+      - NO CLOTHING: Draw the neck and shoulders as bare skin or a smooth mannequin form.
+      - DETAIL: High detail on facial features (eyes, eyelashes, eyebrows, lips, nose contour) and hair.
+      - ${getGenderInstruction(gender)}
+      - ${getDetailInstruction(detailLevel)}
+      
+      Technical Requirements:
+      - ${orientationInstruction}
+      - Output: PNG image with a SOLID WHITE background.
+      - ${styleInstruction}
+      - Background: Pure White (#FFFFFF).
+    `
+  },
+  'face-right': {
+    id: 'face-right',
+    label: 'Face Right Side',
+    description: 'Right profile portrait.',
+    category: 'Person',
+    defaultEnabled: true,
+    prompt: ({ detailLevel, gender, personDescription }) => `
+      You are an expert portrait artist.
+      Task: Create a highly detailed RIGHT PROFILE line art portrait of the subject's FACE/HEAD.
+      
+      CRITICAL REQUIREMENTS:
+      - ${getTargetInstruction(personDescription)}
+      - VIEWPOINT: Transform the angle to be a RIGHT PROFILE VIEW (Subject looking to the right side of the canvas).
+      - CROP/FOCUS: Zoom in and focus strictly on the head, face, and neck.
+      - NO CLOTHING: Draw the neck and shoulders as bare skin or a smooth mannequin form.
+      - DETAIL: High detail on facial features (eyes, eyelashes, eyebrows, lips, nose contour) and hair.
+      - ${getGenderInstruction(gender)}
+      - ${getDetailInstruction(detailLevel)}
+      
+      Technical Requirements:
+      - ${orientationInstruction}
+      - Output: PNG image with a SOLID WHITE background.
+      - ${styleInstruction}
+      - Background: Pure White (#FFFFFF).
+    `
+  },
+  'neutral': {
+    id: 'neutral',
+    label: 'Neutral Pose',
+    description: 'Standing relaxed pose with clothes.',
+    category: 'Person',
+    defaultEnabled: true,
+    prompt: ({ detailLevel, gender, personDescription }) => `
+      You are a concept artist creating a character sheet.
+      Task: Reconstruct the character in a NEUTRAL REFERENCE POSE (A-Pose or I-Pose).
+      
+      CRITICAL REQUIREMENTS:
+      - ${getTargetInstruction(personDescription)}
+      - POSE: Standing straight, arms relaxed at the sides, legs straight, facing forward.
+      - VIEW: Full Body (Head to Toe). You must invent missing legs/feet if cropped.
+      - CLOTHING: PRESERVE THE ORIGINAL CLOTHING. Keep the outfit, style, and accessories intact.
+      - EQUIPMENT REMOVAL: Remove any weapons, held items, bags, or equipment. Just the character in their clothes.
+      - ${getGenderInstruction(gender)}
+      - ${getDetailInstruction(detailLevel)}
+      
+      Technical Requirements:
+      - ${orientationInstruction}
+      - Output: PNG image with a SOLID WHITE background.
+      - ${styleInstruction}
+      - Background: Pure White (#FFFFFF).
+    `
+  },
+  'neutral-nude': {
+    id: 'neutral-nude',
+    label: 'Neutral Pose (Nude)',
+    description: 'Standing relaxed pose without clothes.',
+    category: 'Person',
+    defaultEnabled: true,
+    prompt: ({ detailLevel, gender, personDescription }) => `
+      You are an expert anatomical artist.
+      Task: Reconstruct the character in a NEUTRAL REFERENCE POSE (A-Pose or I-Pose) without clothes.
+      
+      CRITICAL REQUIREMENTS:
+      - ${getTargetInstruction(personDescription)}
+      - POSE: Standing straight, arms relaxed at the sides, legs straight, facing forward.
+      - VIEW: Full Body (Head to Toe). You must invent missing legs/feet if cropped.
+      - CLOTHING: REMOVE ALL CLOTHING. Draw only the bare skin surface and muscle structure (Mannequin/Base mesh style).
+      - SAFETY/MODESTY: Artistic anatomy study. DO NOT draw explicit genitalia. Use "Barbie/Ken doll" smooth surfaces. Keep naughty bits hidden.
+      - EQUIPMENT REMOVAL: Remove all items.
+      - ${getGenderInstruction(gender)}
+      - ${getDetailInstruction(detailLevel)}
+      - ${bodyTypeInstruction}
       
       Technical Requirements:
       - ${orientationInstruction}
@@ -274,7 +385,7 @@ export const TASK_DEFINITIONS: Record<TaskType, TaskDefinition> = {
       
       Pose Requirements:
       - STAY STRICT WITH THE POSE. The limb positioning, head tilt, and stance must be identical to the original, just viewed from the opposite side.
-      - Do not change the action or gesture.
+      - ${fullBodyInstruction}
       - CLOTHING REMOVAL / SIMPLIFICATION: Like the front view, simplify clothing to show the ANATOMICAL STRUCTURE and POSE. Create a clean figure study/mannequin style.
       
       Technical Requirements:
@@ -296,11 +407,11 @@ export const TASK_DEFINITIONS: Record<TaskType, TaskDefinition> = {
       
       CRITICAL REQUIREMENTS:
       - ${getTargetInstruction(personDescription)}
-      - CLOTHING: REMOVE ALL CLOTHING. Draw the bare skin surface and muscle structure.
+      - CLOTHING: ABSOLUTELY NO CLOTHING LINES. Remove all shirts, pants, socks, and underwear lines. Draw only the bare skin surface and muscle structure.
       - ${cyberneticInstruction}
-      - SAFETY/MODESTY: This is an artistic anatomy study. DO NOT draw explicit genitalia or sexual features. Use "Barbie/Ken doll" smooth surfaces for private areas. The goal is POSE REFERENCE, not adult content.
+      - SAFETY/MODESTY: This is an artistic anatomy study. DO NOT draw explicit genitalia or sexual features. Use "Barbie/Ken doll" smooth surfaces for private areas. Keep the naughty bits hidden.
       - POSE: Copy the EXACT pose, hands, fingers, and facial expression of the subject.
-      - FULL BODY: Ensure the drawing is FULL BODY. If feet/legs are cropped in the photo, you MUST reconstruct them to show the full standing/sitting figure.
+      - ${fullBodyInstruction}
       - FACE/HANDS: Keep facial details (eyes, nose, mouth) and hands distinct and accurate.
       
       Context:
@@ -328,11 +439,11 @@ export const TASK_DEFINITIONS: Record<TaskType, TaskDefinition> = {
       
       CRITICAL INSTRUCTION:
       - Analyze input view -> Generate COMPLEMENTARY view (Front->Back, Back->Front, Left->Right).
-      - CLOTHING: REMOVE ALL CLOTHING. Draw the bare skin surface and muscle structure.
+      - CLOTHING: ABSOLUTELY NO CLOTHING LINES. Remove all clothes. Draw only the bare skin surface and muscle structure.
       - ${cyberneticInstruction}
-      - SAFETY/MODESTY: Non-explicit anatomical study. No genitalia. Use smooth mannequin surfaces.
+      - SAFETY/MODESTY: Non-explicit anatomical study. No genitalia. Use smooth mannequin surfaces. Keep the naughty bits hidden.
       - POSE: Keep the exact limb positioning and stance, just viewed from the other side.
-      - FULL BODY: MUST be full body. Invent missing legs/feet if needed.
+      - ${fullBodyInstruction}
       
       Context:
       - ${getTargetInstruction(personDescription)}

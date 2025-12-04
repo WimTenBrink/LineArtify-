@@ -1,4 +1,5 @@
 
+
 import { GoogleGenAI } from "@google/genai";
 import { LogLevel, GeneratedImage, TaskType } from "../types";
 import { TASK_DEFINITIONS } from "./taskDefinitions";
@@ -206,19 +207,22 @@ const SAFETY_SETTINGS_BLOCK_NONE = [
 export const detectPeople = async (
     file: File,
     apiKey: string,
-    addLog: (level: LogLevel, title: string, details?: any) => void
+    addLog: (level: LogLevel, title: string, details?: any) => void,
+    gender?: string
 ): Promise<Array<{ description: string, box_2d?: number[] }>> => {
     await new Promise(resolve => setTimeout(resolve, 0));
     const ai = new GoogleGenAI({ apiKey });
     const base64Data = await fileToGenerativePart(file);
 
     addLog(LogLevel.INFO, `Scanning for people in ${file.name}`);
+    
+    const genderHint = (gender && gender !== 'As-is') ? `IMPORTANT: Assume the subjects are ${gender} unless unmistakably otherwise. Use ${gender} terms in the description. Do NOT use terms of the opposite gender.` : '';
 
     const prompt = `
         Analyze this image and identify all distinct human subjects.
         Return a JSON list of objects.
         Each object must have:
-        - "description": A unique visual description (e.g. "man in red hat").
+        - "description": A unique visual description (e.g. "man in red hat"). ${genderHint}
         - "box_2d": A bounding box [ymin, xmin, ymax, xmax] normalized to 0-1000 scale.
 
         If there are NO people, return an empty list [].
@@ -352,7 +356,12 @@ export const generateLineArtTask = async (
       
       // Special post-processing for model types and all-people types
       // Updated to include 'all-people' and 'all-people-nude' in the auto-crop logic
-      if (['model', 'model-full', 'backside', 'nude', 'nude-opposite', 'face', 'all-people', 'all-people-nude'].includes(taskType)) {
+      const autoCropTypes = [
+        'model', 'model-full', 'backside', 'nude', 'nude-opposite', 
+        'face', 'face-left', 'face-right', 'neutral', 'neutral-nude',
+        'all-people', 'all-people-nude'
+      ];
+      if (autoCropTypes.includes(taskType)) {
          onStatusUpdate?.(`Auto-cropping ${taskName}...`);
          url = await cropToContent(url, 10);
       }

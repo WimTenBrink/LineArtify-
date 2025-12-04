@@ -1,4 +1,5 @@
 
+
 import React, { useState, useRef, useEffect } from 'react';
 import { X, ZoomIn, ZoomOut, Maximize, ChevronLeft, ChevronRight } from 'lucide-react';
 import { QueueItem } from '../types';
@@ -155,9 +156,14 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext, onPrev
               ref={imgRef}
               src={displayUrl} 
               alt="Detailed View" 
-              className="max-w-none transition-transform duration-75 ease-out select-none shadow-xl"
+              className="transition-transform duration-75 ease-out select-none shadow-xl"
               style={{ 
-                transform: `translate(${position.x}px, ${position.y}px) scale(${scale})` 
+                transform: `translate(${position.x}px, ${position.y}px) scale(${scale})`,
+                maxWidth: '100%',
+                maxHeight: '100%',
+                width: 'auto',
+                height: 'auto',
+                objectFit: 'contain'
               }}
               draggable={false}
             />

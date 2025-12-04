@@ -8,11 +8,33 @@ export enum ProcessingStatus {
   ENDED = 'ENDED' // For jobs that cannot be retried
 }
 
-export type TaskType = 'full' | 'model' | 'background' | 'model-full' | 'backside' | 'scan-people' | 'nude' | 'nude-opposite' | 'face' | 'all-people' | 'all-people-nude' | 'upscale';
+export type TaskType = 'full' | 'model' | 'background' | 'model-full' | 'backside' | 'scan-people' | 'nude' | 'nude-opposite' | 'face' | 'face-left' | 'face-right' | 'neutral' | 'neutral-nude' | 'all-people' | 'all-people-nude' | 'upscale';
 
 export interface GeneratedImage {
   type: TaskType;
   url: string;
+}
+
+export interface AppOptions {
+  taskTypes: {
+    full: boolean;
+    background: boolean;
+    allPeople: boolean;
+    allPeopleNude: boolean;
+    model: boolean; // Character
+    backside: boolean;
+    nude: boolean;
+    nudeOpposite: boolean;
+    modelFull: boolean;
+    face: boolean;
+    faceLeft: boolean; // New
+    faceRight: boolean; // New
+    neutral: boolean; // New
+    neutralNude: boolean; // New
+    upscale: boolean; 
+  };
+  gender: string;
+  detailLevel: string;
 }
 
 export interface SourceImage {
@@ -20,6 +42,7 @@ export interface SourceImage {
   file: File;
   thumbnailUrl: string;
   timestamp: number;
+  options: AppOptions; // New: Options snapshot per image
 }
 
 export interface QueueItem {
@@ -57,21 +80,4 @@ export interface LogEntry {
   level: LogLevel;
   title: string;
   details?: any;
-}
-
-export interface AppOptions {
-  taskTypes: {
-    full: boolean;
-    background: boolean;
-    allPeople: boolean;
-    allPeopleNude: boolean;
-    model: boolean; // Character
-    backside: boolean;
-    nude: boolean;
-    nudeOpposite: boolean;
-    modelFull: boolean;
-    face: boolean;
-  };
-  gender: string;
-  detailLevel: string;
 }

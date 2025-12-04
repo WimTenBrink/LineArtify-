@@ -1,4 +1,5 @@
 
+
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useLogger } from './services/loggerService';
 import { generateLineArtTask, detectPeople } from './services/geminiService';
@@ -7,7 +8,7 @@ import ImageViewer from './components/ImageViewer';
 import ManualDialog from './components/ManualDialog';
 import OptionsDialog from './components/OptionsDialog';
 import { QueueItem, ProcessingStatus, LogLevel, AppOptions, SourceImage, TaskType } from './types';
-import { Upload, X, RefreshCw, Play, Pause, Trash2, Key, Save, FolderOpen, Terminal, Book, ChevronRight, Settings, Image as ImageIcon, Layers, User, AlertTriangle, CheckCircle2, ScanFace, Check, Repeat, RefreshCcw, Wand2, Square, CheckSquare } from 'lucide-react';
+import { Upload, X, RefreshCw, Play, Pause, Trash2, Key, Save, FolderOpen, Terminal, Book, ChevronRight, Settings, Image as ImageIcon, Layers, User, AlertTriangle, CheckCircle2, ScanFace, Check, Repeat, RefreshCcw, Wand2, Square, CheckSquare, XCircle, Info } from 'lucide-react';
 
 const MAX_CONCURRENT_REQUESTS = 3;
 
@@ -21,7 +22,7 @@ const blobToBase64 = (blob: Blob): Promise<string> => {
   });
 };
 
-type QueueView = 'UPLOADS' | 'JOBS' | 'FULL' | 'BACKGROUND' | 'COUNTING' | 'RETRY' | 'FAILED' | 'ENDED' | 'MODEL' | 'BACKSIDE' | 'NUDE' | 'NUDE_OPPOSITE' | 'MODEL_FULL' | 'FACE' | 'ALL_PEOPLE' | 'ALL_PEOPLE_NUDE' | 'UPSCALE';
+type QueueView = 'UPLOADS' | 'JOBS' | 'FULL' | 'BACKGROUND' | 'COUNTING' | 'RETRY' | 'FAILED' | 'ENDED' | 'MODEL' | 'BACKSIDE' | 'NUDE' | 'NUDE_OPPOSITE' | 'MODEL_FULL' | 'FACE' | 'FACE_LEFT' | 'FACE_RIGHT' | 'NEUTRAL' | 'NEUTRAL_NUDE' | 'ALL_PEOPLE' | 'ALL_PEOPLE_NUDE' | 'UPSCALE';
 
 export default function App() {
   // Data State
@@ -40,20 +41,31 @@ export default function App() {
       nude: true, // Default Checked
       nudeOpposite: true, // Default Checked
       modelFull: true, // Default Checked
-      face: true
+      face: true,
+      faceLeft: true, // Default Checked (Changed)
+      faceRight: true, // Default Checked (Changed)
+      neutral: true, // Default Checked (Changed)
+      neutralNude: true, // Default Checked (Changed)
+      upscale: false // Default off
     },
-    gender: 'Female', // Default Female
+    gender: 'As-is', // Default As-is for detection
     detailLevel: 'Medium' // Default Medium
   });
 
   // UI State
   const [activeQueueView, setActiveQueueView] = useState<QueueView>('UPLOADS');
+  const [isGalleryFilteredByQueue, setIsGalleryFilteredByQueue] = useState(false);
   const [viewerItemId, setViewerItemId] = useState<string | null>(null);
   const [isConsoleOpen, setIsConsoleOpen] = useState(false);
   const [isManualOpen, setIsManualOpen] = useState(false);
   const [isOptionsOpen, setIsOptionsOpen] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [selectedSourceIds, setSelectedSourceIds] = useState<Set<string>>(new Set());
+
+  // Reset gallery queue filter when view changes
+  useEffect(() => {
+    setIsGalleryFilteredByQueue(false);
+  }, [activeQueueView]);
 
   // Queue Control State (Start/Stop per queue)
   const [queueControls, setQueueControls] = useState({
@@ -69,6 +81,10 @@ export default function App() {
     nudeOpposite: true,
     modelFull: true,
     face: true,
+    faceLeft: true,
+    faceRight: true,
+    neutral: true,
+    neutralNude: true,
     upscale: true
   });
 
@@ -94,6 +110,10 @@ export default function App() {
       case 'NUDE_OPPOSITE': return queue.filter(i => i.taskType === 'nude-opposite' && i.status === ProcessingStatus.PENDING);
       case 'MODEL_FULL': return queue.filter(i => i.taskType === 'model-full' && i.status === ProcessingStatus.PENDING);
       case 'FACE': return queue.filter(i => i.taskType === 'face' && i.status === ProcessingStatus.PENDING);
+      case 'FACE_LEFT': return queue.filter(i => i.taskType === 'face-left' && i.status === ProcessingStatus.PENDING);
+      case 'FACE_RIGHT': return queue.filter(i => i.taskType === 'face-right' && i.status === ProcessingStatus.PENDING);
+      case 'NEUTRAL': return queue.filter(i => i.taskType === 'neutral' && i.status === ProcessingStatus.PENDING);
+      case 'NEUTRAL_NUDE': return queue.filter(i => i.taskType === 'neutral-nude' && i.status === ProcessingStatus.PENDING);
       case 'UPSCALE': return queue.filter(i => i.taskType === 'upscale' && i.status === ProcessingStatus.PENDING);
       case 'RETRY': return queue.filter(i => i.status === ProcessingStatus.ERROR && !i.isBlocked && i.retryCount < 3);
       case 'FAILED': return queue.filter(i => i.status === ProcessingStatus.ERROR && (i.isBlocked || (i.retryCount >= 3 && i.isLastChance)));
@@ -102,11 +122,36 @@ export default function App() {
     }
   };
 
-  // Gallery items - Filter by selectedSourceIds if any are selected
-  const allGalleryItems = queue.filter(i => i.status === ProcessingStatus.SUCCESS && i.taskType !== 'scan-people');
-  const galleryItems = selectedSourceIds.size > 0 
-    ? allGalleryItems.filter(i => selectedSourceIds.has(i.sourceId))
-    : allGalleryItems;
+  // Gallery Logic
+  const allSuccessItems = queue.filter(i => i.status === ProcessingStatus.SUCCESS && i.taskType !== 'scan-people');
+  
+  let galleryItems = allSuccessItems;
+
+  // 1. Filter by Queue View if enabled
+  if (isGalleryFilteredByQueue && activeQueueView !== 'UPLOADS' && activeQueueView !== 'JOBS' && activeQueueView !== 'RETRY' && activeQueueView !== 'FAILED' && activeQueueView !== 'ENDED') {
+      const targetTypeMap: Record<string, TaskType> = {
+          'FULL': 'full', 'BACKGROUND': 'background', 'ALL_PEOPLE': 'all-people', 'ALL_PEOPLE_NUDE': 'all-people-nude',
+          'MODEL': 'model', 'BACKSIDE': 'backside', 'NUDE': 'nude', 'NUDE_OPPOSITE': 'nude-opposite',
+          'MODEL_FULL': 'model-full', 'FACE': 'face', 'FACE_LEFT': 'face-left', 'FACE_RIGHT': 'face-right', 
+          'NEUTRAL': 'neutral', 'NEUTRAL_NUDE': 'neutral-nude', 'UPSCALE': 'upscale'
+      };
+      const targetType = targetTypeMap[activeQueueView];
+      if (targetType) {
+          galleryItems = galleryItems.filter(i => i.taskType === targetType);
+      }
+  }
+
+  // 2. Filter by Selected Sources
+  if (selectedSourceIds.size > 0) {
+      galleryItems = galleryItems.filter(i => selectedSourceIds.has(i.sourceId));
+  }
+
+  // 3. Sort Gallery: TaskType then Filename
+  galleryItems.sort((a, b) => {
+      const typeCompare = a.taskType.localeCompare(b.taskType);
+      if (typeCompare !== 0) return typeCompare;
+      return a.file.name.localeCompare(b.file.name);
+  });
 
   // Progress Calculation
   const totalJobs = queue.length;
@@ -124,19 +169,23 @@ export default function App() {
     if (!files) return;
     const newUploads: SourceImage[] = [];
     
+    // Capture current options state to attach to these images
+    const currentOptionsSnapshot = JSON.parse(JSON.stringify(options));
+
     Array.from(files).filter(f => f.type.startsWith('image/')).forEach(file => {
        const id = crypto.randomUUID();
        newUploads.push({
          id,
          file,
          thumbnailUrl: URL.createObjectURL(file),
-         timestamp: Date.now()
+         timestamp: Date.now(),
+         options: currentOptionsSnapshot // Attach options
        });
     });
 
     if (newUploads.length > 0) {
       setUploads(prev => [...prev, ...newUploads]);
-      addLog(LogLevel.INFO, `Uploaded ${newUploads.length} images.`);
+      addLog(LogLevel.INFO, `Uploaded ${newUploads.length} images with attached options.`);
       populateQueues(newUploads);
     }
   }, [options, addLog]);
@@ -145,51 +194,40 @@ export default function App() {
     const newJobs: QueueItem[] = [];
     
     sources.forEach(source => {
+      // Use source specific options
+      const srcOpts = source.options;
+
       // Full Art Job
-      newJobs.push({
-        id: crypto.randomUUID(),
-        sourceId: source.id,
-        file: source.file,
-        taskType: 'full',
-        thumbnailUrl: source.thumbnailUrl,
-        status: ProcessingStatus.PENDING,
-        timestamp: Date.now(),
-        retryCount: 0,
-        maxRetries: 3,
-        errorHistory: []
-      });
+      if (srcOpts.taskTypes.full) {
+          newJobs.push(createJob(source, 'full'));
+      }
 
       // Background Job
-      newJobs.push({
-        id: crypto.randomUUID(),
-        sourceId: source.id,
-        file: source.file,
-        taskType: 'background',
-        thumbnailUrl: source.thumbnailUrl,
-        status: ProcessingStatus.PENDING,
-        timestamp: Date.now(),
-        retryCount: 0,
-        maxRetries: 3,
-        errorHistory: []
-      });
+      if (srcOpts.taskTypes.background) {
+          newJobs.push(createJob(source, 'background'));
+      }
 
-      // Counting Job (Scanner)
-      newJobs.push({
-        id: crypto.randomUUID(),
-        sourceId: source.id,
-        file: source.file,
-        taskType: 'scan-people',
-        thumbnailUrl: source.thumbnailUrl,
-        status: ProcessingStatus.PENDING,
-        timestamp: Date.now(),
-        retryCount: 0,
-        maxRetries: 3,
-        errorHistory: []
-      });
+      // Counting Job (Scanner) - Always needed for person logic
+      newJobs.push(createJob(source, 'scan-people'));
     });
 
     setQueue(prev => [...prev, ...newJobs]);
   };
+
+  const createJob = (source: SourceImage, taskType: TaskType, personDescription?: string, detectBox?: number[]): QueueItem => ({
+        id: crypto.randomUUID(),
+        sourceId: source.id,
+        file: source.file,
+        taskType: taskType,
+        personDescription,
+        detectBox,
+        thumbnailUrl: source.thumbnailUrl,
+        status: ProcessingStatus.PENDING,
+        timestamp: Date.now(),
+        retryCount: 0,
+        maxRetries: 3,
+        errorHistory: []
+  });
 
   const deleteUpload = (id: string) => {
     setUploads(prev => prev.filter(u => u.id !== id));
@@ -219,27 +257,30 @@ export default function App() {
 
   const handleUpscale = async (item: QueueItem) => {
       if (!item.result?.url) return;
-      
-      try {
-          const res = await fetch(item.result.url);
+      spawnUpscaleJob(item, item.result.url);
+  };
+
+  const spawnUpscaleJob = async (parentItem: QueueItem, url: string) => {
+    try {
+          const res = await fetch(url);
           const blob = await res.blob();
           const file = new File([blob], `source-for-upscale.png`, { type: 'image/png' });
 
           const newJob: QueueItem = {
               id: crypto.randomUUID(),
-              sourceId: item.sourceId,
+              sourceId: parentItem.sourceId,
               file: file,
               taskType: 'upscale',
-              thumbnailUrl: item.result.url,
+              thumbnailUrl: url,
               status: ProcessingStatus.PENDING,
               timestamp: Date.now(),
               retryCount: 0,
               maxRetries: 3,
               errorHistory: [],
-              personDescription: item.personDescription
+              personDescription: parentItem.personDescription
           };
           setQueue(prev => [...prev, newJob]);
-          addLog(LogLevel.INFO, `Created Upscale job for ${item.file.name}`);
+          addLog(LogLevel.INFO, `Created Upscale job for ${parentItem.file.name}`);
       } catch (e) {
           addLog(LogLevel.ERROR, "Failed to create upscale job", e);
       }
@@ -275,7 +316,11 @@ export default function App() {
         
         // 3. Specific tasks
         if (!candidate) candidate = findInQueue('face', 'face');
+        if (!candidate) candidate = findInQueue('face-left', 'faceLeft');
+        if (!candidate) candidate = findInQueue('face-right', 'faceRight');
         if (!candidate) candidate = findInQueue('model', 'model');
+        if (!candidate) candidate = findInQueue('neutral', 'neutral');
+        if (!candidate) candidate = findInQueue('neutral-nude', 'neutralNude');
         if (!candidate) candidate = findInQueue('nude', 'nude');
         if (!candidate) candidate = findInQueue('nude-opposite', 'nudeOpposite');
         if (!candidate) candidate = findInQueue('backside', 'backside');
@@ -298,12 +343,18 @@ export default function App() {
         }
 
         try {
+            // Find source to get options
+            const source = uploads.find(u => u.id === job.sourceId);
+            
+            // Fallback options if source missing (shouldn't happen)
+            const jobOptions = source?.options || options; 
+
             if (job.taskType === 'scan-people') {
                 // Special Handling for Scanner
-                await handleScanning(job, apiKey);
+                await handleScanning(job, apiKey, jobOptions);
             } else {
                 // Regular Generation
-                await handleGeneration(job, apiKey);
+                await handleGeneration(job, apiKey, jobOptions);
             }
         } catch (error: any) {
              const isSafety = error.message?.includes("Content Policy") || error.message?.includes("Safety");
@@ -313,7 +364,7 @@ export default function App() {
 
     const interval = setInterval(runProcessor, 1000);
     return () => clearInterval(interval);
-  }, [queue, queueControls, processingJobs.length, options]); // Dependencies
+  }, [queue, queueControls, processingJobs.length, options, uploads]); // Dependencies
 
   const handleJobError = (job: QueueItem, message: string, isSafety: boolean) => {
       addLog(LogLevel.WARN, `Job Failed: ${message}`);
@@ -346,49 +397,42 @@ export default function App() {
       }));
   };
 
-  const handleScanning = async (job: QueueItem, apiKey: string) => {
+  const handleScanning = async (job: QueueItem, apiKey: string, jobOptions: AppOptions) => {
       addLog(LogLevel.INFO, `Scanning ${job.file.name}...`);
-      const people = await detectPeople(job.file, apiKey, addLog);
+      
+      const people = await detectPeople(job.file, apiKey, addLog, jobOptions.gender);
       
       // Success mark for scanner
       setQueue(prev => prev.map(i => i.id === job.id ? { ...i, status: ProcessingStatus.SUCCESS } : i));
 
       const newJobs: QueueItem[] = [];
+      const source = uploads.find(u => u.id === job.sourceId)!;
 
       // HELPER: Job Creator
-      const create = (type: TaskType, description?: string, box?: number[]) => ({
-          id: crypto.randomUUID(),
-          sourceId: job.sourceId,
-          file: job.file,
-          taskType: type,
-          personDescription: description,
-          detectBox: box,
-          thumbnailUrl: job.thumbnailUrl,
-          status: ProcessingStatus.PENDING,
-          timestamp: Date.now(),
-          retryCount: 0,
-          maxRetries: 3,
-          errorHistory: []
-      });
+      const create = (type: TaskType, description?: string, box?: number[]) => createJob(source, type, description, box);
 
       // 1. Group Tasks (Only if more than 1 person detected)
       if (people.length > 1) {
-          if (options.taskTypes.allPeople) {
+          if (jobOptions.taskTypes.allPeople) {
               newJobs.push(create('all-people'));
           }
-          if (options.taskTypes.allPeopleNude) {
+          if (jobOptions.taskTypes.allPeopleNude) {
               newJobs.push(create('all-people-nude'));
           }
       }
 
       // 2. Individual Tasks (Loop through detected people)
       people.forEach(p => {
-          if (options.taskTypes.face) newJobs.push(create('face', p.description, p.box_2d));
-          if (options.taskTypes.model) newJobs.push(create('model', p.description, p.box_2d));
-          if (options.taskTypes.backside) newJobs.push(create('backside', p.description, p.box_2d));
-          if (options.taskTypes.nude) newJobs.push(create('nude', p.description, p.box_2d));
-          if (options.taskTypes.nudeOpposite) newJobs.push(create('nude-opposite', p.description, p.box_2d));
-          if (options.taskTypes.modelFull) newJobs.push(create('model-full', p.description, p.box_2d));
+          if (jobOptions.taskTypes.face) newJobs.push(create('face', p.description, p.box_2d));
+          if (jobOptions.taskTypes.faceLeft) newJobs.push(create('face-left', p.description, p.box_2d));
+          if (jobOptions.taskTypes.faceRight) newJobs.push(create('face-right', p.description, p.box_2d));
+          if (jobOptions.taskTypes.model) newJobs.push(create('model', p.description, p.box_2d));
+          if (jobOptions.taskTypes.neutral) newJobs.push(create('neutral', p.description, p.box_2d));
+          if (jobOptions.taskTypes.neutralNude) newJobs.push(create('neutral-nude', p.description, p.box_2d));
+          if (jobOptions.taskTypes.backside) newJobs.push(create('backside', p.description, p.box_2d));
+          if (jobOptions.taskTypes.nude) newJobs.push(create('nude', p.description, p.box_2d));
+          if (jobOptions.taskTypes.nudeOpposite) newJobs.push(create('nude-opposite', p.description, p.box_2d));
+          if (jobOptions.taskTypes.modelFull) newJobs.push(create('model-full', p.description, p.box_2d));
       });
 
       if (newJobs.length > 0) {
@@ -399,13 +443,13 @@ export default function App() {
       }
   };
 
-  const handleGeneration = async (job: QueueItem, apiKey: string) => {
+  const handleGeneration = async (job: QueueItem, apiKey: string, jobOptions: AppOptions) => {
       const res = await generateLineArtTask(
           job.file,
           apiKey,
           job.taskType,
-          options.gender,
-          options.detailLevel,
+          jobOptions.gender,
+          jobOptions.detailLevel,
           addLog,
           undefined,
           job.personDescription
@@ -413,19 +457,9 @@ export default function App() {
 
       setQueue(prev => prev.map(i => i.id === job.id ? { ...i, status: ProcessingStatus.SUCCESS, result: res } : i));
 
-      // Auto Download
-      try {
-          const link = document.createElement('a');
-          link.href = res.url;
-          // Filename: Line-<Queue>-<Filename>.png
-          const baseName = job.file.name.substring(0, job.file.name.lastIndexOf('.')) || job.file.name;
-          link.download = `Line-${job.taskType}-${baseName}.png`;
-          document.body.appendChild(link);
-          link.click();
-          document.body.removeChild(link);
-          addLog(LogLevel.INFO, `Auto-downloaded result for ${job.file.name}`);
-      } catch (e) {
-          addLog(LogLevel.ERROR, `Failed to auto-download: ${e}`);
+      // Check for automatic upscale - Spawns a new upscale job using the RESULT of this job
+      if (jobOptions.taskTypes.upscale && job.taskType !== 'upscale') {
+           spawnUpscaleJob(job, res.url);
       }
   };
 
@@ -492,7 +526,7 @@ export default function App() {
                       const res = await fetch(u.data);
                       const blob = await res.blob();
                       const file = new File([blob], u.file.name, { type: u.file.type });
-                      return { ...u, file, thumbnailUrl: URL.createObjectURL(file) };
+                      return { ...u, file, thumbnailUrl: URL.createObjectURL(file), options: u.options || options };
                   }));
                   setUploads(prev => [...prev, ...newUploads]);
                   populateQueues(newUploads);
@@ -545,6 +579,10 @@ export default function App() {
           case 'ALL_PEOPLE_NUDE': return taskType === 'all-people-nude';
           case 'MODEL': return taskType === 'model';
           case 'FACE': return taskType === 'face';
+          case 'FACE_LEFT': return taskType === 'face-left';
+          case 'FACE_RIGHT': return taskType === 'face-right';
+          case 'NEUTRAL': return taskType === 'neutral';
+          case 'NEUTRAL_NUDE': return taskType === 'neutral-nude';
           case 'BACKSIDE': return taskType === 'backside';
           case 'NUDE': return taskType === 'nude';
           case 'NUDE_OPPOSITE': return taskType === 'nude-opposite';
@@ -553,6 +591,42 @@ export default function App() {
           default: return false; 
       }
   };
+
+  // Helper to check source completion status for Green Border
+  const getSourceStatus = (sourceId: string) => {
+      const jobs = queue.filter(j => j.sourceId === sourceId);
+      if (jobs.length === 0) return 'empty';
+      const allDone = jobs.every(j => 
+        j.status === ProcessingStatus.SUCCESS || 
+        j.status === ProcessingStatus.ENDED || 
+        (j.status === ProcessingStatus.ERROR && (j.isBlocked || j.retryCount >= j.maxRetries))
+      );
+      if (allDone) return 'done';
+      return 'processing';
+  };
+
+  // Helper to get active jobs for a source
+  const getActiveJobsForSource = (sourceId: string) => {
+      return queue.filter(j => j.sourceId === sourceId && (j.status === ProcessingStatus.PROCESSING || j.status === ProcessingStatus.PENDING));
+  };
+  
+  const getProcessingJobsForSource = (sourceId: string) => {
+      return queue.filter(j => j.sourceId === sourceId && j.status === ProcessingStatus.PROCESSING);
+  };
+
+  // Sort Uploads: 1. Processing/Active Jobs, 2. File Name
+  const sortedUploads = [...uploads].sort((a, b) => {
+      const aProcessing = getProcessingJobsForSource(a.id);
+      const bProcessing = getProcessingJobsForSource(b.id);
+      
+      const aHasProcessing = aProcessing.length > 0;
+      const bHasProcessing = bProcessing.length > 0;
+
+      if (aHasProcessing && !bHasProcessing) return -1;
+      if (!aHasProcessing && bHasProcessing) return 1;
+
+      return a.file.name.localeCompare(b.file.name);
+  });
 
   return (
     <div 
@@ -640,7 +714,11 @@ export default function App() {
                     <option value="COUNTING">Counting (Scanner)</option>
                     <option disabled>--- Person Tasks ---</option>
                     <option value="MODEL">Character</option>
-                    <option value="FACE">Face Portrait</option>
+                    <option value="FACE">Face Portrait (Front)</option>
+                    <option value="FACE_LEFT">Face Left Side</option>
+                    <option value="FACE_RIGHT">Face Right Side</option>
+                    <option value="NEUTRAL">Neutral Pose</option>
+                    <option value="NEUTRAL_NUDE">Neutral Pose (Nude)</option>
                     <option value="BACKSIDE">Opposite View</option>
                     <option value="NUDE">Nude</option>
                     <option value="NUDE_OPPOSITE">Nude Opposite</option>
@@ -664,57 +742,80 @@ export default function App() {
                         </div>
                     )}
 
-                    {(activeQueueView === 'FULL' || activeQueueView === 'BACKGROUND' || activeQueueView === 'ALL_PEOPLE' || activeQueueView === 'ALL_PEOPLE_NUDE' || activeQueueView === 'COUNTING' || 
-                      activeQueueView === 'MODEL' || activeQueueView === 'FACE' || activeQueueView === 'BACKSIDE' || activeQueueView === 'NUDE' || 
-                      activeQueueView === 'NUDE_OPPOSITE' || activeQueueView === 'MODEL_FULL' || activeQueueView === 'UPSCALE') && (
-                        <div className="w-full flex justify-between items-center bg-slate-800/50 p-2 rounded">
-                            <span className="text-xs font-mono uppercase text-slate-400">Queue Active</span>
-                            <button 
-                                onClick={() => {
-                                    if (activeQueueView === 'FULL') toggleQueueControl('full');
-                                    if (activeQueueView === 'BACKGROUND') toggleQueueControl('background');
-                                    if (activeQueueView === 'ALL_PEOPLE') toggleQueueControl('allPeople');
-                                    if (activeQueueView === 'ALL_PEOPLE_NUDE') toggleQueueControl('allPeopleNude');
-                                    if (activeQueueView === 'COUNTING') toggleQueueControl('counting');
-                                    if (activeQueueView === 'MODEL') toggleQueueControl('model');
-                                    if (activeQueueView === 'FACE') toggleQueueControl('face');
-                                    if (activeQueueView === 'BACKSIDE') toggleQueueControl('backside');
-                                    if (activeQueueView === 'NUDE') toggleQueueControl('nude');
-                                    if (activeQueueView === 'NUDE_OPPOSITE') toggleQueueControl('nudeOpposite');
-                                    if (activeQueueView === 'MODEL_FULL') toggleQueueControl('modelFull');
-                                    if (activeQueueView === 'UPSCALE') toggleQueueControl('upscale');
-                                }}
-                                className={`w-10 h-5 rounded-full relative transition-colors ${
-                                    (activeQueueView === 'FULL' && queueControls.full) || 
-                                    (activeQueueView === 'BACKGROUND' && queueControls.background) ||
-                                    (activeQueueView === 'ALL_PEOPLE' && queueControls.allPeople) ||
-                                    (activeQueueView === 'ALL_PEOPLE_NUDE' && queueControls.allPeopleNude) ||
-                                    (activeQueueView === 'COUNTING' && queueControls.counting) ||
-                                    (activeQueueView === 'MODEL' && queueControls.model) ||
-                                    (activeQueueView === 'FACE' && queueControls.face) ||
-                                    (activeQueueView === 'BACKSIDE' && queueControls.backside) ||
-                                    (activeQueueView === 'NUDE' && queueControls.nude) ||
-                                    (activeQueueView === 'NUDE_OPPOSITE' && queueControls.nudeOpposite) ||
-                                    (activeQueueView === 'MODEL_FULL' && queueControls.modelFull) ||
-                                    (activeQueueView === 'UPSCALE' && queueControls.upscale)
-                                    ? 'bg-emerald-500' : 'bg-slate-600'}`}
-                            >
-                                <div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full transition-transform ${
-                                     (activeQueueView === 'FULL' && queueControls.full) || 
-                                     (activeQueueView === 'BACKGROUND' && queueControls.background) ||
-                                     (activeQueueView === 'ALL_PEOPLE' && queueControls.allPeople) ||
-                                     (activeQueueView === 'ALL_PEOPLE_NUDE' && queueControls.allPeopleNude) ||
-                                     (activeQueueView === 'COUNTING' && queueControls.counting) ||
-                                     (activeQueueView === 'MODEL' && queueControls.model) ||
-                                     (activeQueueView === 'FACE' && queueControls.face) ||
-                                     (activeQueueView === 'BACKSIDE' && queueControls.backside) ||
-                                     (activeQueueView === 'NUDE' && queueControls.nude) ||
-                                     (activeQueueView === 'NUDE_OPPOSITE' && queueControls.nudeOpposite) ||
-                                     (activeQueueView === 'MODEL_FULL' && queueControls.modelFull) ||
-                                     (activeQueueView === 'UPSCALE' && queueControls.upscale)
-                                     ? 'translate-x-5.5 left-0.5' : 'translate-x-0.5 left-0.5'
-                                }`}></div>
-                            </button>
+                    {(activeQueueView !== 'UPLOADS' && activeQueueView !== 'JOBS' && activeQueueView !== 'RETRY' && activeQueueView !== 'FAILED' && activeQueueView !== 'ENDED') && (
+                        <div className="w-full space-y-2">
+                             {/* Start/Stop Row */}
+                            <div className="flex justify-between items-center bg-slate-800/50 p-2 rounded">
+                                <span className="text-xs font-mono uppercase text-slate-400">Queue Active</span>
+                                <button 
+                                    onClick={() => {
+                                        if (activeQueueView === 'FULL') toggleQueueControl('full');
+                                        if (activeQueueView === 'BACKGROUND') toggleQueueControl('background');
+                                        if (activeQueueView === 'ALL_PEOPLE') toggleQueueControl('allPeople');
+                                        if (activeQueueView === 'ALL_PEOPLE_NUDE') toggleQueueControl('allPeopleNude');
+                                        if (activeQueueView === 'COUNTING') toggleQueueControl('counting');
+                                        if (activeQueueView === 'MODEL') toggleQueueControl('model');
+                                        if (activeQueueView === 'FACE') toggleQueueControl('face');
+                                        if (activeQueueView === 'FACE_LEFT') toggleQueueControl('faceLeft');
+                                        if (activeQueueView === 'FACE_RIGHT') toggleQueueControl('faceRight');
+                                        if (activeQueueView === 'NEUTRAL') toggleQueueControl('neutral');
+                                        if (activeQueueView === 'NEUTRAL_NUDE') toggleQueueControl('neutralNude');
+                                        if (activeQueueView === 'BACKSIDE') toggleQueueControl('backside');
+                                        if (activeQueueView === 'NUDE') toggleQueueControl('nude');
+                                        if (activeQueueView === 'NUDE_OPPOSITE') toggleQueueControl('nudeOpposite');
+                                        if (activeQueueView === 'MODEL_FULL') toggleQueueControl('modelFull');
+                                        if (activeQueueView === 'UPSCALE') toggleQueueControl('upscale');
+                                    }}
+                                    className={`w-10 h-5 rounded-full relative transition-colors ${
+                                        (activeQueueView === 'FULL' && queueControls.full) || 
+                                        (activeQueueView === 'BACKGROUND' && queueControls.background) ||
+                                        (activeQueueView === 'ALL_PEOPLE' && queueControls.allPeople) ||
+                                        (activeQueueView === 'ALL_PEOPLE_NUDE' && queueControls.allPeopleNude) ||
+                                        (activeQueueView === 'COUNTING' && queueControls.counting) ||
+                                        (activeQueueView === 'MODEL' && queueControls.model) ||
+                                        (activeQueueView === 'FACE' && queueControls.face) ||
+                                        (activeQueueView === 'FACE_LEFT' && queueControls.faceLeft) ||
+                                        (activeQueueView === 'FACE_RIGHT' && queueControls.faceRight) ||
+                                        (activeQueueView === 'NEUTRAL' && queueControls.neutral) ||
+                                        (activeQueueView === 'NEUTRAL_NUDE' && queueControls.neutralNude) ||
+                                        (activeQueueView === 'BACKSIDE' && queueControls.backside) ||
+                                        (activeQueueView === 'NUDE' && queueControls.nude) ||
+                                        (activeQueueView === 'NUDE_OPPOSITE' && queueControls.nudeOpposite) ||
+                                        (activeQueueView === 'MODEL_FULL' && queueControls.modelFull) ||
+                                        (activeQueueView === 'UPSCALE' && queueControls.upscale)
+                                        ? 'bg-emerald-500' : 'bg-slate-600'}`}
+                                >
+                                    <div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full transition-transform ${
+                                        (activeQueueView === 'FULL' && queueControls.full) || 
+                                        (activeQueueView === 'BACKGROUND' && queueControls.background) ||
+                                        (activeQueueView === 'ALL_PEOPLE' && queueControls.allPeople) ||
+                                        (activeQueueView === 'ALL_PEOPLE_NUDE' && queueControls.allPeopleNude) ||
+                                        (activeQueueView === 'COUNTING' && queueControls.counting) ||
+                                        (activeQueueView === 'MODEL' && queueControls.model) ||
+                                        (activeQueueView === 'FACE' && queueControls.face) ||
+                                        (activeQueueView === 'FACE_LEFT' && queueControls.faceLeft) ||
+                                        (activeQueueView === 'FACE_RIGHT' && queueControls.faceRight) ||
+                                        (activeQueueView === 'NEUTRAL' && queueControls.neutral) ||
+                                        (activeQueueView === 'NEUTRAL_NUDE' && queueControls.neutralNude) ||
+                                        (activeQueueView === 'BACKSIDE' && queueControls.backside) ||
+                                        (activeQueueView === 'NUDE' && queueControls.nude) ||
+                                        (activeQueueView === 'NUDE_OPPOSITE' && queueControls.nudeOpposite) ||
+                                        (activeQueueView === 'MODEL_FULL' && queueControls.modelFull) ||
+                                        (activeQueueView === 'UPSCALE' && queueControls.upscale)
+                                        ? 'translate-x-5.5 left-0.5' : 'translate-x-0.5 left-0.5'
+                                    }`}></div>
+                                </button>
+                            </div>
+                            {/* Filter Checkbox */}
+                            <label className="flex items-center space-x-2 p-2 rounded hover:bg-white/5 cursor-pointer">
+                                <input 
+                                    type="checkbox" 
+                                    checked={isGalleryFilteredByQueue} 
+                                    onChange={() => setIsGalleryFilteredByQueue(!isGalleryFilteredByQueue)}
+                                    className="accent-indigo-500 rounded w-4 h-4"
+                                />
+                                <span className="text-xs text-slate-300">Filter Gallery to this Queue</span>
+                            </label>
                         </div>
                     )}
 
@@ -742,8 +843,16 @@ export default function App() {
 
             {/* List */}
             <div className="flex-1 overflow-y-auto p-3 space-y-3 scrollbar-hide">
-                {activeQueueView === 'UPLOADS' && uploads.map(upload => (
-                    <div key={upload.id} className="bg-slate-800 rounded-lg overflow-hidden border border-white/5 relative group flex flex-col">
+                {activeQueueView === 'UPLOADS' && sortedUploads.map(upload => {
+                    const status = getSourceStatus(upload.id);
+                    const processingJobs = getProcessingJobsForSource(upload.id);
+                    const activeJobs = getActiveJobsForSource(upload.id);
+                    
+                    // NEW: Check for scanning
+                    const isScanning = processingJobs.some(j => j.taskType === 'scan-people');
+
+                    return (
+                    <div key={upload.id} className={`bg-slate-800 rounded-lg overflow-hidden border relative group flex flex-col ${status === 'done' ? 'border-emerald-500 border-4' : 'border-white/5'}`}>
                         <div className="relative">
                              <img src={upload.thumbnailUrl} alt="source" className="w-full h-auto opacity-70 group-hover:opacity-100 transition-opacity" />
                              
@@ -760,13 +869,44 @@ export default function App() {
                              <button onClick={() => deleteUpload(upload.id)} className="absolute top-2 right-2 p-1 bg-black/50 hover:bg-red-500 text-white rounded opacity-0 group-hover:opacity-100 transition-opacity z-20">
                                 <Trash2 size={14} />
                              </button>
+
+                             {/* SCANNING ANIMATION OVERLAY */}
+                             {isScanning && (
+                                <div className="absolute inset-0 pointer-events-none z-10 overflow-hidden">
+                                     <div className="absolute inset-0 bg-emerald-500/10"></div>
+                                     <div className="absolute left-0 w-full h-[2px] bg-emerald-400 shadow-[0_0_15px_rgba(52,211,153,1)] animate-scan"></div>
+                                </div>
+                             )}
+
+                             {/* Active Jobs Badge Overlay on Image */}
+                             {processingJobs.length > 0 && (
+                                 <div className={`absolute inset-0 flex flex-col items-center justify-center transition-all ${isScanning ? 'bg-black/20' : 'bg-black/60 backdrop-blur-[2px]'}`}>
+                                     <div className={`${isScanning ? 'bg-emerald-600/90' : 'bg-indigo-600/90'} text-white px-3 py-1 rounded-full text-xs font-bold shadow-lg flex items-center space-x-2`}>
+                                        {isScanning ? <ScanFace size={12} className="animate-pulse" /> : <RefreshCw size={12} className="animate-spin" />}
+                                        <span>{isScanning ? 'Scanning...' : `Processing ${processingJobs[0].taskType}`}</span>
+                                     </div>
+                                 </div>
+                             )}
                         </div>
                         <div className="p-2">
-                            <p className="text-xs font-bold text-slate-200 truncate">{upload.file.name}</p>
-                            <p className="text-[10px] text-slate-500">{new Date(upload.timestamp).toLocaleTimeString()}</p>
+                             {/* Active Jobs List */}
+                             {activeJobs.length > 0 ? (
+                                 <div className="flex flex-wrap gap-1 mb-2">
+                                     {activeJobs.slice(0, 3).map(j => (
+                                         <span key={j.id} className={`text-[9px] px-1.5 py-0.5 rounded border truncate max-w-[80px] ${j.status === ProcessingStatus.PROCESSING ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30 font-bold' : 'bg-indigo-500/30 text-indigo-300 border-indigo-500/20'}`}>
+                                             {j.taskType}
+                                         </span>
+                                     ))}
+                                     {activeJobs.length > 3 && <span className="text-[9px] px-1 py-0.5 text-slate-500">+{activeJobs.length - 3}</span>}
+                                 </div>
+                             ) : (
+                                <p className="text-[10px] text-slate-500">{new Date(upload.timestamp).toLocaleTimeString()}</p>
+                             )}
+                            
+                            <p className="text-xs font-bold text-slate-200 truncate mt-1">{upload.file.name}</p>
                         </div>
                     </div>
-                ))}
+                )})}
 
                 {activeQueueView !== 'UPLOADS' && getQueueItems(activeQueueView).map(item => (
                      <div key={item.id} className="bg-slate-800 rounded-lg overflow-hidden border border-white/5 relative group">
@@ -846,10 +986,32 @@ export default function App() {
 
         {/* --- MAIN CONTENT (80vw) --- */}
         <div className="w-[80vw] h-full flex flex-col bg-[#0f0f16] relative">
+            {/* Gallery Header for Selection */}
+            {(selectedSourceIds.size > 0 || viewerItemId !== null) && (
+                <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-4">
+                    {selectedSourceIds.size > 0 && (
+                        <div className="bg-indigo-600 shadow-lg border border-indigo-400/50 rounded-full px-4 py-2 flex items-center space-x-4 animate-in slide-in-from-top-4">
+                            <span className="text-sm font-bold text-white">{selectedSourceIds.size} Sources Selected</span>
+                            <button 
+                                onClick={() => setSelectedSourceIds(new Set())}
+                                className="p-1 hover:bg-white/20 rounded-full text-white bg-white/10"
+                                title="Deselect All"
+                            >
+                                <span className="text-xs px-2 font-bold">Deselect All</span>
+                            </button>
+                        </div>
+                    )}
+                </div>
+            )}
+
             {/* Gallery Area */}
             <div className="flex-1 overflow-y-auto p-8">
                  <div className="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-8">
-                     {galleryItems.map(item => (
+                     {galleryItems.map(item => {
+                         const source = uploads.find(u => u.id === item.sourceId);
+                         const usedOptions = source?.options || options;
+
+                         return (
                          <div key={item.id} className="flex flex-col group animate-fade-in">
                              <div 
                                 className={`relative bg-[#1e1e1e] rounded-t-xl overflow-hidden cursor-zoom-in border border-b-0 transition-all duration-300 ${shouldHighlight(item.taskType) ? 'border-emerald-500 ring-4 ring-emerald-500/30' : 'border-white/5'}`}
@@ -879,6 +1041,44 @@ export default function App() {
                                          </span>
                                      )}
                                  </div>
+
+                                 {/* INFO ICON & TOOLTIP */}
+                                 <div className="absolute top-3 right-3 z-30 flex flex-col items-end group/info">
+                                    <div className="p-1.5 bg-black/40 backdrop-blur-md rounded-full text-white/70 hover:text-white hover:bg-black/60 transition-colors cursor-help">
+                                        <Info size={16} />
+                                    </div>
+                                    
+                                    <div className="absolute top-8 right-0 w-56 bg-slate-900/95 backdrop-blur-xl border border-white/10 rounded-lg shadow-xl p-3 text-xs text-slate-300 invisible group-hover/info:visible opacity-0 group-hover/info:opacity-100 transition-all transform origin-top-right scale-95 group-hover/info:scale-100 z-40 flex flex-col gap-2 pointer-events-none">
+                                        <div>
+                                            <span className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-0.5">Original File</span>
+                                            <span className="truncate block font-medium text-white" title={item.file.name}>{item.file.name}</span>
+                                        </div>
+                                        
+                                        <div className="grid grid-cols-2 gap-2">
+                                             <div>
+                                                <span className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-0.5">Task</span>
+                                                <span className="block text-indigo-300">{item.taskType}</span>
+                                             </div>
+                                             <div>
+                                                <span className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-0.5">Status</span>
+                                                <span className="block text-emerald-400">Completed</span>
+                                             </div>
+                                        </div>
+
+                                        <div className="border-t border-white/5 pt-2 mt-1">
+                                             <span className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Parameters</span>
+                                             <div className="flex justify-between mb-1">
+                                                <span>Gender:</span>
+                                                <span className="text-white font-mono">{usedOptions.gender}</span>
+                                             </div>
+                                             <div className="flex justify-between">
+                                                <span>Detail:</span>
+                                                <span className="text-white font-mono">{usedOptions.detailLevel}</span>
+                                             </div>
+                                        </div>
+                                    </div>
+                                 </div>
+
                              </div>
                              
                              {/* Actions Footer */}
@@ -904,14 +1104,14 @@ export default function App() {
                                  </button>
                              </div>
                          </div>
-                     ))}
+                     )})}
                  </div>
                  
                  {galleryItems.length === 0 && (
                      <div className="h-full flex flex-col items-center justify-center text-slate-600 pointer-events-none">
                          <Layers size={64} className="mb-4 opacity-20" />
                          <p className="text-lg font-medium">
-                            {selectedSourceIds.size > 0 ? "No results for selected images" : "Gallery is empty"}
+                            {selectedSourceIds.size > 0 ? "No results for selected images" : (isGalleryFilteredByQueue ? "No results in this queue" : "Gallery is empty")}
                          </p>
                          <p className="text-sm">Processed images will appear here.</p>
                      </div>

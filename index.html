@@ -27,6 +27,18 @@
         -webkit-backdrop-filter: blur(12px);
         border: 1px solid rgba(255, 255, 255, 0.08);
       }
+
+      /* Scanning Animation */
+      @keyframes scan {
+        0% { top: 0%; opacity: 0; }
+        15% { opacity: 1; }
+        85% { opacity: 1; }
+        100% { top: 100%; opacity: 0; }
+      }
+      .animate-scan {
+        animation: scan 2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+        position: absolute;
+      }
     </style>
   <script type="importmap">
 {
