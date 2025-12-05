@@ -1,4 +1,5 @@
 
+
 import React, { useState, useRef, useEffect } from 'react';
 import { X, ZoomIn, ZoomOut, Maximize, ChevronLeft, ChevronRight, Eye, EyeOff, Repeat } from 'lucide-react';
 import { QueueItem } from '../types';
@@ -72,23 +73,41 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onRepeat, onNe
     setPosition({ x: 0, y: 0 });
   };
 
-  const handleKeyDown = (e: KeyboardEvent) => {
+  const handleKeyDown = (e: React.KeyboardEvent | KeyboardEvent) => {
+    // Only capture if this component is active
     if (e.key === 'ArrowRight' && hasNext && onNext) onNext();
     if (e.key === 'ArrowLeft' && hasPrev && onPrev) onPrev();
     if (e.key === 'Escape') onClose();
-    if (e.key === ' ') setShowOriginal(prev => !prev); // Space to toggle
+    if (e.key === ' ') {
+        e.preventDefault(); // Prevent scroll
+        setShowOriginal(prev => !prev); 
+    }
+    if (e.key === 'Enter' && onRepeat) {
+        e.preventDefault();
+        onRepeat(); 
+    }
   };
 
   useEffect(() => {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [hasNext, hasPrev, onNext, onPrev]);
+  }, [hasNext, hasPrev, onNext, onPrev, onRepeat]);
+
+  // Focus container on mount to capture keys if using div focus
+  useEffect(() => {
+    if (containerRef.current) containerRef.current.focus();
+  }, []);
 
   if (!displayUrl) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/95 backdrop-blur-md animate-in fade-in duration-200">
-      <div className="relative w-[95vw] h-[95vh] bg-[#181825] rounded-xl overflow-hidden shadow-2xl border border-slate-700 flex flex-col">
+    <div 
+        className="fixed inset-0 z-50 flex items-center justify-center bg-black/95 backdrop-blur-md animate-in fade-in duration-200"
+        tabIndex={0}
+        onKeyDown={handleKeyDown}
+        autoFocus
+    >
+      <div className="relative w-[95vw] h-[95vh] bg-[#181825] rounded-xl overflow-hidden shadow-2xl border border-slate-700 flex flex-col outline-none">
         
         {/* Header Config Info */}
         <div className="absolute top-4 left-4 z-20 pointer-events-none">
@@ -117,7 +136,7 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onRepeat, onNe
                 <button 
                   onClick={onRepeat}
                   className="p-2 bg-slate-800/80 hover:bg-indigo-500 rounded-full text-white transition-colors border border-white/10 backdrop-blur"
-                  title="Repeat this job"
+                  title="Repeat this job (Enter)"
                 >
                   <Repeat size={24} />
                 </button>
@@ -205,4 +224,3 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onRepeat, onNe
 };
 
 export default ImageViewer;
-    

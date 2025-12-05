@@ -80,11 +80,14 @@ const OptionsDialog: React.FC<OptionsDialogProps> = ({ isOpen, onClose, options,
   };
 
   const handleSaveConfig = () => {
+    const filename = prompt('Enter a filename for your configuration:', 'lineartify_config');
+    if (!filename) return;
+
     const blob = new Blob([JSON.stringify(options, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'lineartify_config.klc';
+    a.download = `${filename}.klc`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -278,7 +281,7 @@ const OptionsDialog: React.FC<OptionsDialogProps> = ({ isOpen, onClose, options,
                                 <input type="checkbox" checked={options.taskTypes.upscale} onChange={() => toggleTask('upscale')} className="mt-1 accent-indigo-500 w-4 h-4 shrink-0" />
                                 <div className="ml-3">
                                     <span className="block font-bold text-white text-sm">Upscale 4K</span>
-                                    <span className="block text-[10px] text-slate-400 leading-tight">Automatically upscale generated images to 4K resolution using Gemini 3 Pro.</span>
+                                    <span className="block text-[10px] text-slate-400 leading-tight">Enable Native 4K Generation using Gemini 3 Pro (Higher Cost).</span>
                                 </div>
                             </label>
                         </div>

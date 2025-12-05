@@ -237,13 +237,13 @@ export const TASK_DEFINITIONS: Record<TaskType, TaskDefinition> = {
     defaultEnabled: true,
     prompt: ({ detailLevel, gender, personDescription }) => `
       You are an expert portrait artist.
-      Task: Create a highly detailed FRONTAL VIEW line art portrait of the subject's FACE/HEAD.
+      Task: Create a highly detailed FRONTAL VIEW line art portrait of the subject's FACE ONLY.
       
       CRITICAL REQUIREMENTS:
       - ${getTargetInstruction(personDescription)}
       - VIEWPOINT: Transform the angle to be a direct FRONTAL VIEW (Passport photo style). If the subject is looking to the side, rotate the head in your drawing to face FORWARD.
-      - CROP/FOCUS: Zoom in and focus strictly on the head, face, and immediate neck/shoulder area.
-      - NO CLOTHING: Draw the neck and shoulders as bare skin or a smooth mannequin form. Do not draw collars, hoods, shirts, or any clothing lines.
+      - FACE ONLY: Draw ONLY the head and face. Do NOT draw the neck, shoulders, bust, or any part of the body below the chin. Create a "Floating Head" style portrait.
+      - NO CLOTHING: Do not draw any clothing, collars, hoods, or accessories on the neck/body.
       - DETAIL: High detail on facial features (eyes, eyelashes, eyebrows, lips, nose contour) and hair.
       - ${getGenderInstruction(gender)}
       - ${getDetailInstruction(detailLevel)}
@@ -263,13 +263,13 @@ export const TASK_DEFINITIONS: Record<TaskType, TaskDefinition> = {
     defaultEnabled: true,
     prompt: ({ detailLevel, gender, personDescription }) => `
       You are an expert portrait artist.
-      Task: Create a highly detailed LEFT PROFILE line art portrait of the subject's FACE/HEAD.
+      Task: Create a highly detailed LEFT PROFILE line art portrait of the subject's FACE ONLY.
       
       CRITICAL REQUIREMENTS:
       - ${getTargetInstruction(personDescription)}
       - VIEWPOINT: Transform the angle to be a LEFT PROFILE VIEW (Subject looking to the left side of the canvas).
-      - CROP/FOCUS: Zoom in and focus strictly on the head, face, and neck.
-      - NO CLOTHING: Draw the neck and shoulders as bare skin or a smooth mannequin form.
+      - FACE ONLY: Draw ONLY the head and face. Do NOT draw the neck, shoulders, bust, or any part of the body. Create a "Floating Head" style portrait.
+      - NO CLOTHING: Do not draw any clothing, collars, hoods, or accessories.
       - DETAIL: High detail on facial features (eyes, eyelashes, eyebrows, lips, nose contour) and hair.
       - ${getGenderInstruction(gender)}
       - ${getDetailInstruction(detailLevel)}
@@ -289,13 +289,13 @@ export const TASK_DEFINITIONS: Record<TaskType, TaskDefinition> = {
     defaultEnabled: true,
     prompt: ({ detailLevel, gender, personDescription }) => `
       You are an expert portrait artist.
-      Task: Create a highly detailed RIGHT PROFILE line art portrait of the subject's FACE/HEAD.
+      Task: Create a highly detailed RIGHT PROFILE line art portrait of the subject's FACE ONLY.
       
       CRITICAL REQUIREMENTS:
       - ${getTargetInstruction(personDescription)}
       - VIEWPOINT: Transform the angle to be a RIGHT PROFILE VIEW (Subject looking to the right side of the canvas).
-      - CROP/FOCUS: Zoom in and focus strictly on the head, face, and neck.
-      - NO CLOTHING: Draw the neck and shoulders as bare skin or a smooth mannequin form.
+      - FACE ONLY: Draw ONLY the head and face. Do NOT draw the neck, shoulders, bust, or any part of the body. Create a "Floating Head" style portrait.
+      - NO CLOTHING: Do not draw any clothing, collars, hoods, or accessories.
       - DETAIL: High detail on facial features (eyes, eyelashes, eyebrows, lips, nose contour) and hair.
       - ${getGenderInstruction(gender)}
       - ${getDetailInstruction(detailLevel)}

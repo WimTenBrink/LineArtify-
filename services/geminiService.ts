@@ -203,6 +203,12 @@ const SAFETY_SETTINGS_BLOCK_NONE = [
     { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' }
 ];
 
+const sanitizeDescription = (text: string): string => {
+    return text
+        .replace(/\b(child|children|kid|kids|minor|minors|baby|toddler)\b/gi, 'Subject')
+        .replace(/\b(girl|boy)\b/gi, 'Person');
+};
+
 // NEW: Detect people in the image with Bounding Boxes
 export const detectPeople = async (
     file: File,
@@ -225,12 +231,15 @@ export const detectPeople = async (
         - "description": A unique visual description (e.g. "man in red hat"). ${genderHint}
         - "box_2d": A bounding box [ymin, xmin, ymax, xmax] normalized to 0-1000 scale.
 
-        If there are NO people, return an empty list [].
+        Rules:
+        - Identify every person ONLY ONCE. Do not output duplicate entries for the same person.
+        - If multiple people look similar, add location context to description (e.g. "man on left").
+        - If there are NO people, return an empty list [].
         
         Example:
         [
           {"description": "woman in blue", "box_2d": [100, 100, 900, 500]},
-          {"description": "child in front", "box_2d": [500, 400, 800, 600]}
+          {"description": "person in front", "box_2d": [500, 400, 800, 600]}
         ]
     `;
 
@@ -257,9 +266,9 @@ export const detectPeople = async (
         const people = JSON.parse(jsonStr);
         
         if (Array.isArray(people)) {
-            // Validate structure
+            // Validate structure and Sanitize
             return people.map(p => ({
-                description: p.description || String(p),
+                description: sanitizeDescription(p.description || String(p)),
                 box_2d: Array.isArray(p.box_2d) && p.box_2d.length === 4 ? p.box_2d : undefined
             }));
         }
@@ -279,7 +288,8 @@ export const generateLineArtTask = async (
   detailLevel: string,
   addLog: (level: LogLevel, title: string, details?: any) => void,
   onStatusUpdate?: (message: string) => void,
-  personDescription?: string // Optional target
+  personDescription?: string, // Optional target
+  use4k: boolean = false // Optional 4K mode
 ): Promise<GeneratedImage> => {
   
   // Yield to UI to allow initial status render
@@ -290,9 +300,11 @@ export const generateLineArtTask = async (
   onStatusUpdate?.(`Encoding image data...`);
   const base64Data = await fileToGenerativePart(file);
   
-  // Use separate model for upscale
-  const isUpscale = taskType === 'upscale';
-  const modelName = isUpscale ? 'gemini-3-pro-image-preview' : 'gemini-2.5-flash-image';
+  // Determine model based on 4K flag or Upscale task
+  const isUpscaleTask = taskType === 'upscale';
+  
+  // If task is explicitly upscale OR use4k flag is true, use the Pro model
+  const modelName = (isUpscaleTask || use4k) ? 'gemini-3-pro-image-preview' : 'gemini-2.5-flash-image';
   
   // Get prompt from Task Definitions
   let prompt = "";
@@ -318,7 +330,7 @@ export const generateLineArtTask = async (
       prompt = def.prompt({
           gender,
           detailLevel,
-          personDescription
+          personDescription: sanitizeDescription(personDescription || '')
       });
   } else {
       throw new Error(`Unknown Task Type: ${taskType}`);
@@ -338,16 +350,16 @@ export const generateLineArtTask = async (
       }
     };
 
-    // Add upscale config
-    if (isUpscale) {
+    // Add upscale config if model supports it (Gemini 3 Pro)
+    if (modelName === 'gemini-3-pro-image-preview') {
         payload.config.imageConfig = { imageSize: '4K' };
     }
 
     return payload;
   };
 
-  addLog(LogLevel.INFO, `Starting generation for ${file.name} [${taskName}] with ${detailLevel} detail`);
-  onStatusUpdate?.(`Generating ${taskName}...`);
+  addLog(LogLevel.INFO, `Starting generation for ${file.name} [${taskName}] with ${detailLevel} detail ${use4k ? '(4K Mode)' : ''}`);
+  onStatusUpdate?.(`Generating ${taskName}${use4k ? ' (4K)' : ''}...`);
 
   try {
       const response = await ai.models.generateContent(createPayload(prompt));
