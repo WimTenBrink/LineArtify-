@@ -1,7 +1,7 @@
 
 
 import { GoogleGenAI } from "@google/genai";
-import { LogLevel, GeneratedImage, TaskType } from "../types";
+import { LogLevel, GeneratedImage, TaskType, AppOptions } from "../types";
 import { TASK_DEFINITIONS } from "./taskDefinitions";
 
 // Helper to encode file to base64
@@ -284,12 +284,10 @@ export const generateLineArtTask = async (
   file: File, 
   apiKey: string,
   taskType: TaskType,
-  gender: string,
-  detailLevel: string,
+  options: AppOptions,
   addLog: (level: LogLevel, title: string, details?: any) => void,
   onStatusUpdate?: (message: string) => void,
-  personDescription?: string, // Optional target
-  use4k: boolean = false // Optional 4K mode
+  personDescription?: string // Optional target
 ): Promise<GeneratedImage> => {
   
   // Yield to UI to allow initial status render
@@ -300,11 +298,17 @@ export const generateLineArtTask = async (
   onStatusUpdate?.(`Encoding image data...`);
   const base64Data = await fileToGenerativePart(file);
   
-  // Determine model based on 4K flag or Upscale task
+  // Model Selection Logic
+  // 'Upscale' tasks MUST use Pro. 
+  // All other tasks respect the global model preference, defaulting to Flash if unset.
   const isUpscaleTask = taskType === 'upscale';
+  const modelPreference = options.modelPreference || 'flash';
   
-  // If task is explicitly upscale OR use4k flag is true, use the Pro model
-  const modelName = (isUpscaleTask || use4k) ? 'gemini-3-pro-image-preview' : 'gemini-2.5-flash-image';
+  // Determine model name
+  let modelName = 'gemini-2.5-flash-image';
+  if (isUpscaleTask || modelPreference === 'pro') {
+      modelName = 'gemini-3-pro-image-preview';
+  }
   
   // Get prompt from Task Definitions
   let prompt = "";
@@ -328,9 +332,10 @@ export const generateLineArtTask = async (
       if (personDescription) taskName += ` (${personDescription})`;
       
       prompt = def.prompt({
-          gender,
-          detailLevel,
-          personDescription: sanitizeDescription(personDescription || '')
+          gender: options.gender,
+          detailLevel: options.detailLevel,
+          personDescription: sanitizeDescription(personDescription || ''),
+          customStyle: options.customStyle
       });
   } else {
       throw new Error(`Unknown Task Type: ${taskType}`);
@@ -347,10 +352,13 @@ export const generateLineArtTask = async (
       },
       config: { 
           safetySettings: SAFETY_SETTINGS_BLOCK_NONE,
+          // Use user preference for creativity (temperature)
+          // Default to 0.4 for balanced output if not set
+          temperature: options.creativity !== undefined ? options.creativity : 0.4 
       }
     };
 
-    // Add upscale config if model supports it (Gemini 3 Pro)
+    // Add upscale config if using Pro model (implicitly enables 4K output when imageSize is set)
     if (modelName === 'gemini-3-pro-image-preview') {
         payload.config.imageConfig = { imageSize: '4K' };
     }
@@ -358,8 +366,8 @@ export const generateLineArtTask = async (
     return payload;
   };
 
-  addLog(LogLevel.INFO, `Starting generation for ${file.name} [${taskName}] with ${detailLevel} detail ${use4k ? '(4K Mode)' : ''}`);
-  onStatusUpdate?.(`Generating ${taskName}${use4k ? ' (4K)' : ''}...`);
+  addLog(LogLevel.INFO, `Starting generation for ${file.name} [${taskName}]`, { model: modelName, creativity: options.creativity });
+  onStatusUpdate?.(`Generating ${taskName} with ${modelName.includes('flash') ? 'Flash' : 'Pro'}...`);
 
   try {
       const response = await ai.models.generateContent(createPayload(prompt));
@@ -367,13 +375,26 @@ export const generateLineArtTask = async (
       let url = extractImageFromResponse(response, `${file.name} (${taskName})`, addLog);
       
       // Special post-processing for model types and all-people types
-      // Updated to include 'all-people' and 'all-people-nude' in the auto-crop logic
-      const autoCropTypes = [
-        'model', 'model-full', 'backside', 'nude', 'nude-opposite', 
-        'face', 'face-left', 'face-right', 'neutral', 'neutral-nude',
-        'all-people', 'all-people-nude', 'full-nude'
-      ];
-      if (autoCropTypes.includes(taskType)) {
+      // Updated to include all relevant types in the auto-crop logic
+      // Note: We check if the type string contains known keywords to catch all variants
+      const isAutoCropCandidate = 
+          taskType.includes('model') || 
+          taskType.includes('nude') || 
+          taskType.includes('face') || 
+          taskType.includes('neutral') ||
+          taskType.includes('all-people') ||
+          // Styles
+          taskType.includes('chibi') ||
+          taskType.includes('anime') ||
+          taskType.includes('sketch') ||
+          taskType.includes('coloring') ||
+          taskType.includes('cyberpunk') ||
+          taskType.includes('noir') ||
+          taskType.includes('impressionist') ||
+          taskType.includes('sticker') ||
+          taskType.includes('fantasy');
+
+      if (isAutoCropCandidate) {
          onStatusUpdate?.(`Auto-cropping ${taskName}...`);
          url = await cropToContent(url, 10);
       }

@@ -8,7 +8,30 @@ export enum ProcessingStatus {
   ENDED = 'ENDED' // For jobs that cannot be retried
 }
 
-export type TaskType = 'full' | 'full-nude' | 'model' | 'background' | 'model-full' | 'backside' | 'scan-people' | 'nude' | 'nude-opposite' | 'face' | 'face-left' | 'face-right' | 'neutral' | 'neutral-nude' | 'all-people' | 'all-people-nude' | 'upscale';
+export type TaskType = 
+  // Scenes
+  'full' | 'full-nude' | 'background' | 
+  // Groups
+  'all-people' | 'all-people-nude' |
+  // Character
+  'model' | 'nude' | 
+  'model-full' | 'model-full-nude' |
+  'neutral' | 'neutral-nude' |
+  'backside' | 'nude-opposite' |
+  // Faces
+  'face' | 'face-left' | 'face-right' | 
+  // Styles (New & Expanded)
+  'chibi' | 'chibi-nude' |
+  'anime' | 'anime-nude' |
+  'sketch' | 'sketch-nude' |
+  'coloring-book' | 'coloring-book-nude' |
+  'cyberpunk' | 'cyberpunk-nude' |
+  'noir' | 'noir-nude' |
+  'impressionist' | 'impressionist-nude' |
+  'sticker' | 'sticker-nude' |
+  'fantasy' | 'fantasy-nude' |
+  // Utility
+  'scan-people' | 'upscale';
 
 export interface GeneratedImage {
   type: TaskType;
@@ -18,45 +41,16 @@ export interface GeneratedImage {
 
 export type PriorityLevel = 'Very Low' | 'Low' | 'Normal' | 'High' | 'Very High';
 
+export type ModelPreference = 'flash' | 'pro';
+
 export interface AppOptions {
-  taskTypes: {
-    full: boolean;
-    fullNude: boolean; // New
-    background: boolean;
-    allPeople: boolean;
-    allPeopleNude: boolean;
-    model: boolean; // Character
-    backside: boolean;
-    nude: boolean;
-    nudeOpposite: boolean;
-    modelFull: boolean;
-    face: boolean;
-    faceLeft: boolean; 
-    faceRight: boolean; 
-    neutral: boolean; 
-    neutralNude: boolean; 
-    upscale: boolean; 
-  };
-  taskPriorities: {
-    full: PriorityLevel;
-    fullNude: PriorityLevel; // New
-    background: PriorityLevel;
-    allPeople: PriorityLevel;
-    allPeopleNude: PriorityLevel;
-    model: PriorityLevel;
-    backside: PriorityLevel;
-    nude: PriorityLevel;
-    nudeOpposite: PriorityLevel;
-    modelFull: PriorityLevel;
-    face: PriorityLevel;
-    faceLeft: PriorityLevel;
-    faceRight: PriorityLevel;
-    neutral: PriorityLevel;
-    neutralNude: PriorityLevel;
-    upscale: PriorityLevel;
-  };
+  taskTypes: Record<string, boolean>; // Converted to Record for flexibility with many types
+  taskPriorities: Record<string, PriorityLevel>; // Converted to Record
   gender: string;
   detailLevel: string;
+  modelPreference: ModelPreference; // New: Choose between Flash (Fast) and Pro (Quality)
+  creativity: number; // New: Temperature control (0.0 to 1.0)
+  customStyle: string; // New: User prompt injection
 }
 
 export interface SourceImage {
@@ -64,26 +58,26 @@ export interface SourceImage {
   file: File;
   thumbnailUrl: string;
   timestamp: number;
-  options: AppOptions; // New: Options snapshot per image
+  options: AppOptions; 
 }
 
 export interface QueueItem {
   id: string;
-  sourceId: string; // Link to SourceImage
-  file: File; // Reference to the file (for convenience)
+  sourceId: string; 
+  file: File; 
   taskType: TaskType;
-  personDescription?: string; // For multi-person extraction
-  detectBox?: number[]; // [ymin, xmin, ymax, xmax] normalized 0-1000
-  thumbnailUrl: string; // Reference to source thumbnail
+  personDescription?: string; 
+  detectBox?: number[]; 
+  thumbnailUrl: string; 
   status: ProcessingStatus;
   result?: GeneratedImage;
   errorMessage?: string;
   timestamp: number;
-  retryCount: number; // Counts number of failures
-  maxRetries: number; // Limit for retries
+  retryCount: number; 
+  maxRetries: number; 
   errorHistory: string[];
   isBlocked?: boolean; 
-  isLastChance?: boolean; // For the "Failed" queue logic
+  isLastChance?: boolean; 
 }
 
 export enum LogLevel {
