@@ -14,7 +14,7 @@ import {
     ChevronRight, Settings, Image as ImageIcon, Layers, User, AlertTriangle, CheckCircle2, 
     ScanFace, Check, Repeat, RefreshCcw, Wand2, Square, CheckSquare, XCircle, Info,
     ArrowUp, ArrowDown, ArrowUpCircle, ArrowDownCircle, Mountain, Users, UserCheck, 
-    ArrowLeft, ArrowRight, Smile, EyeOff, Accessibility, Loader2, Grip, Monitor
+    ArrowLeft, ArrowRight, Smile, EyeOff, Accessibility, Loader2, Grip, Monitor, PieChart
 } from 'lucide-react';
 
 const MAX_CONCURRENT_REQUESTS = 5;
@@ -190,7 +190,7 @@ export default function App() {
 
   const processingJobs = queue.filter(i => i.status === ProcessingStatus.PROCESSING);
   
-  // Helper to filter queue items
+  // Helper to filter queue items for SIDEBAR display (pending only usually)
   const getQueueItems = (type: QueueView): QueueItem[] => {
     switch (type) {
       case 'JOBS': return processingJobs;
@@ -218,9 +218,35 @@ export default function App() {
     }
   };
 
-  const getQueueCount = (type: QueueView): number => {
-      if (type === 'UPLOADS') return uploads.length;
-      return getQueueItems(type).length;
+  // Helper to calculate statistics for the Button Bar
+  // Returns formatted string "x/y" (Unfinished/Total) or simple count
+  const getQueueStats = (type: QueueView): string | number => {
+    if (type === 'UPLOADS') return uploads.length;
+    if (type === 'JOBS') return processingJobs.length;
+    if (type === 'RETRY' || type === 'FAILED' || type === 'ENDED') return getQueueItems(type).length;
+
+    // For specific task types, calculate Unfinished / Total
+    const typeMap: Record<string, TaskType> = {
+        'FULL': 'full', 'FULL_NUDE': 'full-nude', 'BACKGROUND': 'background', 'ALL_PEOPLE': 'all-people', 'ALL_PEOPLE_NUDE': 'all-people-nude',
+        'MODEL': 'model', 'BACKSIDE': 'backside', 'NUDE': 'nude', 'NUDE_OPPOSITE': 'nude-opposite',
+        'MODEL_FULL': 'model-full', 'FACE': 'face', 'FACE_LEFT': 'face-left', 'FACE_RIGHT': 'face-right', 
+        'NEUTRAL': 'neutral', 'NEUTRAL_NUDE': 'neutral-nude', 'UPSCALE': 'upscale', 'COUNTING': 'scan-people'
+    };
+
+    const taskType = typeMap[type];
+    if (taskType) {
+        const allItems = queue.filter(j => j.taskType === taskType);
+        const total = allItems.length;
+        // Unfinished: Pending, Processing, or Retryable Error
+        const unfinished = allItems.filter(j => 
+            j.status === ProcessingStatus.PENDING || 
+            j.status === ProcessingStatus.PROCESSING || 
+            (j.status === ProcessingStatus.ERROR && !j.isBlocked && j.retryCount < 3)
+        ).length;
+        
+        return `${unfinished}/${total}`;
+    }
+    return 0;
   };
 
   // Gallery Logic
@@ -415,8 +441,6 @@ export default function App() {
          uploads.forEach(u => deleteUpload(u.id));
          return;
      } else if (view === 'JOBS') {
-         // No logic for deleting active jobs broadly, safe to skip or just cancel
-         // But maybe delete all PROCESSING?
          itemsToDelete = queue.filter(i => i.status === ProcessingStatus.PROCESSING);
      } else if (view === 'RETRY') {
          itemsToDelete = queue.filter(i => i.status === ProcessingStatus.ERROR && !i.isBlocked && i.retryCount < 3);
@@ -428,7 +452,8 @@ export default function App() {
          // It's a TaskType view
          const type = typeMap[view];
          if (type) {
-             itemsToDelete = queue.filter(i => i.taskType === type && i.status === ProcessingStatus.PENDING);
+             // Delete ALL jobs of this type, regardless of status (Pending, Success, Error)
+             itemsToDelete = queue.filter(i => i.taskType === type);
          }
      }
      
@@ -897,17 +922,17 @@ export default function App() {
       {/* --- BUTTON BAR NAVIGATION --- */}
       <div className="w-full bg-[#1e1e2e] border-b border-white/5 flex items-center px-2 py-2 overflow-x-auto space-x-1 scrollbar-hide flex-none z-40 relative">
         {queueViews.map((view) => {
-            const count = getQueueCount(view.id);
+            const count = getQueueStats(view.id);
             return (
                 <button
                     key={view.id}
                     onClick={() => setActiveQueueView(view.id)}
                     onMouseEnter={(e) => setHoveredButton({id: view.id, rect: e.currentTarget.getBoundingClientRect()})}
                     onMouseLeave={() => setHoveredButton(null)}
-                    className={`flex-none w-14 h-9 flex items-center justify-center rounded-lg transition-all border relative ${activeQueueView === view.id ? 'bg-indigo-600 border-indigo-500 text-white shadow-lg' : 'bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700 hover:text-slate-200'}`}
+                    className={`flex-none min-w-[3.5rem] px-2 h-9 flex items-center justify-center rounded-lg transition-all border relative ${activeQueueView === view.id ? 'bg-indigo-600 border-indigo-500 text-white shadow-lg' : 'bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700 hover:text-slate-200'}`}
                 >
-                    <view.icon size={18} />
-                    <span className="ml-1.5 text-[10px] font-bold">{count}</span>
+                    <view.icon size={18} className="shrink-0" />
+                    <span className="ml-2 text-[10px] font-bold font-mono">{count}</span>
                 </button>
             );
         })}
@@ -1074,6 +1099,16 @@ export default function App() {
                     const status = getSourceStatus(upload.id);
                     const processingJobs = getProcessingJobsForSource(upload.id);
                     const isScanning = processingJobs.some(j => j.taskType === 'scan-people');
+                    
+                    // Calc Source Stats
+                    const jobsForSource = queue.filter(j => j.sourceId === upload.id);
+                    const totalSourceJobs = jobsForSource.length;
+                    const finishedSourceJobs = jobsForSource.filter(j => 
+                        j.status === ProcessingStatus.SUCCESS || 
+                        j.status === ProcessingStatus.ENDED || 
+                        (j.status === ProcessingStatus.ERROR && (j.isBlocked || j.retryCount >= j.maxRetries))
+                    ).length;
+
                     return (
                     <div 
                         key={upload.id} 
@@ -1086,6 +1121,14 @@ export default function App() {
                                  <button onClick={(e) => { e.stopPropagation(); toggleSourceSelection(upload.id); }} className={`p-1 rounded bg-black/50 backdrop-blur transition-colors ${selectedSourceIds.has(upload.id) ? 'text-emerald-400' : 'text-slate-400 hover:text-white'}`}>
                                      {selectedSourceIds.has(upload.id) ? <CheckSquare size={20} /> : <Square size={20} />}
                                  </button>
+                             </div>
+                             
+                             {/* Stats Badge */}
+                             <div className="absolute top-2 right-2 z-20 pointer-events-none">
+                                <div className="bg-black/60 backdrop-blur px-2 py-0.5 rounded text-[10px] font-bold text-white flex items-center gap-1 border border-white/10">
+                                    <PieChart size={10} className={finishedSourceJobs === totalSourceJobs && totalSourceJobs > 0 ? 'text-emerald-400' : 'text-slate-400'} />
+                                    <span>{finishedSourceJobs} / {totalSourceJobs}</span>
+                                </div>
                              </div>
                              
                              {isScanning && (<div className="absolute inset-0 pointer-events-none z-10 overflow-hidden"><div className="absolute inset-0 bg-emerald-500/10"></div><div className="absolute left-0 w-full h-[2px] bg-emerald-400 shadow-[0_0_15px_rgba(52,211,153,1)] animate-scan"></div></div>)}
@@ -1221,6 +1264,7 @@ export default function App() {
                 item={item} 
                 onClose={() => setViewerItemId(null)} 
                 onRepeat={() => repeatJob(item)}
+                onDelete={() => { deleteJob(item.id); setViewerItemId(null); }}
                 {...viewerNav}
             />
           ) : null;

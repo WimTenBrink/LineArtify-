@@ -1,20 +1,21 @@
 
 
 import React, { useState, useRef, useEffect } from 'react';
-import { X, ZoomIn, ZoomOut, Maximize, ChevronLeft, ChevronRight, Eye, EyeOff, Repeat } from 'lucide-react';
+import { X, ZoomIn, ZoomOut, Maximize, ChevronLeft, ChevronRight, Eye, EyeOff, Repeat, Trash2 } from 'lucide-react';
 import { QueueItem } from '../types';
 
 interface ImageViewerProps {
   item: QueueItem;
   onClose: () => void;
   onRepeat?: () => void;
+  onDelete?: () => void;
   onNext?: () => void;
   onPrev?: () => void;
   hasNext: boolean;
   hasPrev: boolean;
 }
 
-const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onRepeat, onNext, onPrev, hasNext, hasPrev }) => {
+const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onRepeat, onDelete, onNext, onPrev, hasNext, hasPrev }) => {
   const [scale, setScale] = useState(1);
   const [position, setPosition] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
@@ -132,6 +133,15 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onRepeat, onNe
 
         {/* Top Right Controls */}
         <div className="absolute top-4 right-4 z-30 flex items-center space-x-3">
+             {onDelete && (
+                <button 
+                  onClick={onDelete}
+                  className="p-2 bg-slate-800/80 hover:bg-red-500 rounded-full text-white transition-colors border border-white/10 backdrop-blur"
+                  title="Delete this job"
+                >
+                  <Trash2 size={24} />
+                </button>
+             )}
              {onRepeat && (
                 <button 
                   onClick={onRepeat}
@@ -143,7 +153,7 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onRepeat, onNe
              )}
              <button 
               onClick={onClose}
-              className="p-2 bg-slate-800/80 hover:bg-red-500/80 rounded-full text-white transition-colors border border-white/10 backdrop-blur"
+              className="p-2 bg-slate-800/80 hover:bg-slate-700 rounded-full text-white transition-colors border border-white/10 backdrop-blur"
             >
               <X size={24} />
             </button>
