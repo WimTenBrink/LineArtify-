@@ -1,7 +1,7 @@
 
 
 import React, { useState, useRef } from 'react';
-import { X, Layers, Settings, Save, Upload, Download, Cpu, Sparkles, CheckSquare, Square, Info } from 'lucide-react';
+import { X, Layers, Settings, Save, Upload, Download, Cpu, Sparkles, CheckSquare, Square, Info, Check, Shield, Palette, Sliders } from 'lucide-react';
 import { AppOptions, TaskType, PriorityLevel } from '../types';
 import { TASK_DEFINITIONS } from '../services/taskDefinitions';
 
@@ -19,7 +19,7 @@ const PrioritySelector: React.FC<{
   const colorClass = {
       'Very Low': 'bg-slate-700 text-slate-400',
       'Low': 'bg-slate-600 text-slate-300',
-      'Normal': 'bg-indigo-600 text-white',
+      'Normal': 'bg-purple-600 text-white',
       'High': 'bg-emerald-600 text-white',
       'Very High': 'bg-amber-600 text-white'
   }[priority] || 'bg-slate-600';
@@ -32,48 +32,57 @@ const PrioritySelector: React.FC<{
          <select 
             value={priority} 
             onChange={(e) => onChange(e.target.value as PriorityLevel)}
-            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer bg-slate-900 text-white"
           >
-              <option value="Very Low">Very Low</option>
-              <option value="Low">Low</option>
-              <option value="Normal">Normal</option>
-              <option value="High">High</option>
-              <option value="Very High">Very High</option>
+              <option value="Very Low" className="bg-slate-900 text-slate-300">Very Low</option>
+              <option value="Low" className="bg-slate-900 text-slate-300">Low</option>
+              <option value="Normal" className="bg-slate-900 text-white">Normal</option>
+              <option value="High" className="bg-slate-900 text-white">High</option>
+              <option value="Very High" className="bg-slate-900 text-white">Very High</option>
           </select>
       </div>
   );
 };
 
-// Configuration of Task Groups to pair Clothed/Nude variants
-const TASK_GROUPS = [
-    // Scenes
-    { category: 'Scene', label: 'Full Scene', clothed: 'full', nude: 'full-nude' },
-    { category: 'Scene', label: 'Background Only', clothed: 'background' },
-    // Groups
-    { category: 'Group', label: 'Group Extraction', clothed: 'all-people', nude: 'all-people-nude' },
-    // Characters
-    { category: 'Person', label: 'Character Extraction', clothed: 'model', nude: 'nude' },
-    { category: 'Person', label: 'Body Reconstruction', clothed: 'model-full', nude: 'model-full-nude' },
-    { category: 'Person', label: 'Neutral Pose', clothed: 'neutral', nude: 'neutral-nude' },
-    { category: 'Person', label: 'Backside View', clothed: 'backside', nude: 'nude-opposite' },
-    // Faces
-    { category: 'Person', label: 'Face Front', clothed: 'face' },
-    { category: 'Person', label: 'Face Left', clothed: 'face-left' },
-    { category: 'Person', label: 'Face Right', clothed: 'face-right' },
-    // Styles
-    { category: 'Style', label: 'Chibi', clothed: 'chibi', nude: 'chibi-nude' },
-    { category: 'Style', label: 'Anime (90s)', clothed: 'anime', nude: 'anime-nude' },
-    { category: 'Style', label: 'Rough Sketch', clothed: 'sketch', nude: 'sketch-nude' },
-    { category: 'Style', label: 'Coloring Book', clothed: 'coloring-book', nude: 'coloring-book-nude' },
-    { category: 'Style', label: 'Cyberpunk', clothed: 'cyberpunk', nude: 'cyberpunk-nude' },
-    { category: 'Style', label: 'Noir', clothed: 'noir', nude: 'noir-nude' },
-    { category: 'Style', label: 'Impressionist', clothed: 'impressionist', nude: 'impressionist-nude' },
-    { category: 'Style', label: 'Sticker', clothed: 'sticker', nude: 'sticker-nude' },
-    { category: 'Style', label: 'Fantasy', clothed: 'fantasy', nude: 'fantasy-nude' },
+// Data structures for UI Grouping
+const SCENE_TASKS = [
+    { id: 'full', label: 'Full Scene', description: 'Everything' },
+    { id: 'full-nude', label: 'Scene Nude', description: 'No Clothes' },
+    { id: 'background', label: 'Background', description: 'No People' },
+    { id: 'all-people', label: 'All People', description: 'Group Shot' },
+    { id: 'all-people-nude', label: 'All People Nude', description: 'Group Nude' }
 ];
+
+const BODY_VIEWS = [
+    { label: 'As-is', baseId: 'model-full' },
+    { label: 'Front', baseId: 'body-front' },
+    { label: 'Left', baseId: 'body-left' },
+    { label: 'Right', baseId: 'body-right' },
+    { label: 'Back', baseId: 'backside' },
+];
+
+const FACE_VIEWS = [
+    { label: 'As-is', id: 'face-asis' },
+    { label: 'Front', id: 'face' },
+    { label: 'Left', id: 'face-left' },
+    { label: 'Right', id: 'face-right' },
+    { label: 'Back', id: 'face-back' },
+];
+
+const MODESTY_OPTIONS = [
+    'None', 'Left Hand', 'Right Hand', 'Both Hands', 'Object', 'Veil', 'Long Hair', 'Steam', 'Shadow'
+];
+
+// Sort Styles Alphabetically
+const STYLES = Object.keys(TASK_DEFINITIONS)
+    .filter(k => TASK_DEFINITIONS[k as TaskType].category === 'Style' && !k.endsWith('-nude'))
+    .sort((a, b) => TASK_DEFINITIONS[a as TaskType].label.localeCompare(TASK_DEFINITIONS[b as TaskType].label));
 
 const OptionsDialog: React.FC<OptionsDialogProps> = ({ isOpen, onClose, options, setOptions }) => {
   const [activeTab, setActiveTab] = useState<number>(0);
+  const [isSaveMode, setIsSaveMode] = useState(false);
+  const [presetName, setPresetName] = useState("lineartify-preset");
+  const [hoveredStyle, setHoveredStyle] = useState<TaskType | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   if (!isOpen) return null;
@@ -86,210 +95,347 @@ const OptionsDialog: React.FC<OptionsDialogProps> = ({ isOpen, onClose, options,
     }));
   };
 
-  const setGroupBulk = (category: string, type: 'clothed' | 'nude' | 'all' | 'none') => {
-      setOptions(prev => {
-          const nextTypes = { ...prev.taskTypes };
-          TASK_GROUPS.filter(g => g.category === category).forEach(g => {
-              const hasClothed = g.clothed && TASK_DEFINITIONS[g.clothed as TaskType];
-              const hasNude = g.nude && TASK_DEFINITIONS[g.nude as TaskType];
+  const performSave = () => {
+    try {
+        const finalName = presetName.trim() || "lineartify-preset";
+        const fullName = finalName.endsWith('.klc') ? finalName : `${finalName}.klc`;
 
-              if (type === 'all') {
-                  if (hasClothed) nextTypes[g.clothed] = true;
-                  if (hasNude) nextTypes[g.nude!] = true;
-              } else if (type === 'none') {
-                  if (hasClothed) nextTypes[g.clothed] = false;
-                  if (hasNude) nextTypes[g.nude!] = false;
-              } else if (type === 'clothed') {
-                  if (hasClothed) nextTypes[g.clothed] = true;
-              } else if (type === 'nude') {
-                  if (hasNude) nextTypes[g.nude!] = true;
-              }
-          });
-          return { ...prev, taskTypes: nextTypes };
-      });
-  };
-
-  const setBulk = (type: 'all' | 'none' | 'clothed' | 'nude') => {
-    setOptions(prev => {
-        const nextTypes = { ...prev.taskTypes };
-        TASK_GROUPS.forEach(g => {
-            const hasClothed = g.clothed && TASK_DEFINITIONS[g.clothed as TaskType];
-            const hasNude = g.nude && TASK_DEFINITIONS[g.nude as TaskType];
-
-            if (type === 'all') {
-                if (hasClothed) nextTypes[g.clothed] = true;
-                if (hasNude) nextTypes[g.nude!] = true;
-            } else if (type === 'none') {
-                if (hasClothed) nextTypes[g.clothed] = false;
-                if (hasNude) nextTypes[g.nude!] = false;
-            } else if (type === 'clothed') {
-                if (hasClothed) nextTypes[g.clothed] = true;
-            } else if (type === 'nude') {
-                if (hasNude) nextTypes[g.nude!] = true;
+        // Create a structured save object
+        const savePackage = {
+            version: 1,
+            type: 'lineartify-preset',
+            timestamp: Date.now(),
+            data: {
+                taskTypes: { ...options.taskTypes },
+                taskPriorities: { ...options.taskPriorities },
+                gender: options.gender,
+                detailLevel: options.detailLevel,
+                modelPreference: options.modelPreference,
+                creativity: options.creativity,
+                customStyle: options.customStyle,
+                modesty: options.modesty
             }
-        });
-        return { ...prev, taskTypes: nextTypes };
-    });
+        };
+
+        const jsonString = JSON.stringify(savePackage, null, 2);
+        const blob = new Blob([jsonString], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = fullName;
+        document.body.appendChild(link);
+        link.click();
+
+        // Cleanup
+        setTimeout(() => {
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+            setIsSaveMode(false); // Reset UI
+        }, 100);
+
+    } catch (err) {
+        console.error("Save failed:", err);
+        alert("Failed to create save file.");
+    }
   };
 
-  const handleSaveConfig = () => {
-    const filename = prompt('Enter a filename:', 'lineartify_config');
-    if (!filename) return;
-    const blob = new Blob([JSON.stringify(options, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = `${filename}.klc`; document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
-  };
-
-  const handleLoadConfig = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const performLoad = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+
     const reader = new FileReader();
-    reader.onload = (ev) => {
-      try {
-        const parsed = JSON.parse(ev.target?.result as string);
-        if (parsed.taskTypes) { setOptions(p => ({...p, ...parsed})); alert('Loaded.'); }
-      } catch (err) { alert('Failed.'); }
+    reader.onload = (event) => {
+        try {
+            const text = event.target?.result as string;
+            if (!text) throw new Error("File is empty");
+
+            const parsed = JSON.parse(text);
+            
+            // Handle both legacy (raw options) and new (structured) formats
+            let loadedOptions: Partial<AppOptions> = {};
+
+            if (parsed.type === 'lineartify-preset' && parsed.data) {
+                // New Format
+                loadedOptions = parsed.data;
+            } else if (parsed.taskTypes || parsed.gender) {
+                // Legacy/Raw Format
+                loadedOptions = parsed;
+            } else {
+                throw new Error("Unrecognized preset format");
+            }
+
+            setOptions(prev => ({
+                ...prev,
+                ...loadedOptions,
+                taskTypes: {
+                    ...prev.taskTypes,
+                    ...(loadedOptions.taskTypes || {})
+                },
+                taskPriorities: {
+                    ...prev.taskPriorities,
+                    ...(loadedOptions.taskPriorities || {})
+                }
+            }));
+            
+        } catch (err) {
+            console.error("Load failed:", err);
+            alert("Failed to load preset. Invalid file.");
+        }
     };
     reader.readAsText(file);
-    e.target.value = '';
+    e.target.value = ''; // Reset to allow reloading same file
   };
 
-  // Render a Group Row
-  const renderGroupRow = (group: typeof TASK_GROUPS[0]) => {
-      const clothedKey = group.clothed as TaskType;
-      const nudeKey = group.nude as TaskType | undefined;
-      
-      const hasClothed = !!TASK_DEFINITIONS[clothedKey];
-      const hasNude = nudeKey && !!TASK_DEFINITIONS[nudeKey];
-
-      if (!hasClothed && !hasNude) return null;
-
-      const isClothedEnabled = options.taskTypes[clothedKey];
-      const isNudeEnabled = hasNude ? options.taskTypes[nudeKey!] : false;
-
-      const currentPriority = options.taskPriorities[clothedKey] || 'Normal';
-      
-      const handleGroupPriority = (p: PriorityLevel) => {
-          setOptions(prev => {
-              const next = { ...prev.taskPriorities };
-              if (hasClothed) next[clothedKey] = p;
-              if (hasNude) next[nudeKey!] = p;
-              return { ...prev, taskPriorities: next };
-          });
-      };
-
-      return (
-          <div key={group.label} className="flex items-center bg-slate-800 border border-white/5 rounded-lg p-2 hover:border-white/10 transition-colors">
-              {/* Label */}
-              <div className="flex-1 min-w-0 pr-4">
-                  <div className="text-xs font-bold text-slate-200 truncate" title={group.label}>{group.label}</div>
-                  <div className="text-[9px] text-slate-500 truncate">{TASK_DEFINITIONS[clothedKey]?.description}</div>
-              </div>
-
-              {/* Checkboxes */}
-              <div className="flex items-center space-x-3 mr-4">
-                  {hasClothed && (
-                      <button 
-                        onClick={() => toggleTask(clothedKey)}
-                        className={`flex items-center space-x-1.5 px-2 py-1 rounded border transition-all ${isClothedEnabled ? 'bg-indigo-500/20 border-indigo-500 text-indigo-300' : 'bg-slate-900 border-white/10 text-slate-500 hover:border-slate-400'}`}
-                      >
-                         {isClothedEnabled ? <CheckSquare size={14} /> : <Square size={14} />}
-                         <span className="text-[10px] font-bold uppercase">Clothed</span>
-                      </button>
-                  )}
-                  
-                  {hasNude && (
-                       <button 
-                        onClick={() => toggleTask(nudeKey!)}
-                        className={`flex items-center space-x-1.5 px-2 py-1 rounded border transition-all ${isNudeEnabled ? 'bg-rose-500/20 border-rose-500 text-rose-300' : 'bg-slate-900 border-white/10 text-slate-500 hover:border-slate-400'}`}
-                      >
-                         {isNudeEnabled ? <CheckSquare size={14} /> : <Square size={14} />}
-                         <span className="text-[10px] font-bold uppercase">Nude</span>
-                      </button>
-                  )}
-              </div>
-
-              {/* Priority */}
-              <div className="w-20 h-6 shrink-0">
-                  <PrioritySelector priority={currentPriority} onChange={handleGroupPriority} />
-              </div>
-          </div>
-      );
+  const setAll = (keys: string[], val: boolean) => {
+      setOptions(prev => {
+          const next = { ...prev.taskTypes };
+          keys.forEach(k => { if(TASK_DEFINITIONS[k as TaskType]) next[k] = val; });
+          return { ...prev, taskTypes: next };
+      });
+  };
+  
+  const resetStyles = () => {
+       const styleKeys: string[] = [];
+       STYLES.forEach(s => {
+           styleKeys.push(s);
+           styleKeys.push(`${s}-nude`);
+       });
+       setAll(styleKeys, false);
   };
 
-  const categories = ['Scene', 'Group', 'Person', 'Style'];
+  const getTabClass = (index: number) => `flex-1 py-4 text-sm font-bold uppercase tracking-wide flex items-center justify-center gap-2 transition-colors border-b-2 ${activeTab === index ? 'text-purple-400 border-purple-500 bg-[#2d2a3d]' : 'text-slate-400 border-transparent hover:bg-[#2d2a3d]/50 hover:text-slate-200'}`;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm">
-      <div className="bg-[#1e1e2e] w-[95vw] h-[95vh] rounded-xl shadow-2xl flex flex-col border border-slate-700 overflow-hidden">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm text-slate-200">
+      <div className="bg-[#1e1c2e] w-[95vw] h-[95vh] rounded-xl shadow-2xl flex flex-col border border-white/10 overflow-hidden">
         
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 bg-slate-800 border-b border-slate-700 shrink-0">
+        <div className="flex items-center justify-between px-6 py-4 bg-[#252233] border-b border-white/5 shrink-0">
           <h2 className="text-xl font-bold text-white tracking-tight">Configuration</h2>
           <button onClick={onClose} className="p-1 hover:bg-white/10 rounded-full transition-colors"><X size={24} className="text-slate-400 hover:text-white" /></button>
         </div>
 
         {/* Tabs */}
-        <div className="flex border-b border-slate-700 bg-slate-900/50 shrink-0">
-           <button onClick={() => setActiveTab(0)} className={`flex-1 py-4 text-sm font-bold uppercase tracking-wide flex items-center justify-center gap-2 transition-colors ${activeTab === 0 ? 'text-indigo-400 border-b-2 border-indigo-500 bg-slate-800' : 'text-slate-400 hover:bg-slate-800/50 hover:text-slate-200'}`}><Layers size={16} /> Tasks</button>
-           <button onClick={() => setActiveTab(1)} className={`flex-1 py-4 text-sm font-bold uppercase tracking-wide flex items-center justify-center gap-2 transition-colors ${activeTab === 1 ? 'text-indigo-400 border-b-2 border-indigo-500 bg-slate-800' : 'text-slate-400 hover:bg-slate-800/50 hover:text-slate-200'}`}><Settings size={16} /> Advanced</button>
+        <div className="flex border-b border-white/5 bg-[#1a1825] shrink-0">
+           <button onClick={() => setActiveTab(0)} className={getTabClass(0)}><Layers size={16} /> Tasks</button>
+           <button onClick={() => setActiveTab(1)} className={getTabClass(1)}><Palette size={16} /> Styles</button>
+           <button onClick={() => setActiveTab(2)} className={getTabClass(2)}><Cpu size={16} /> Advanced</button>
+           <button onClick={() => setActiveTab(3)} className={getTabClass(3)}><Sliders size={16} /> Modifiers</button>
         </div>
 
         {/* Content */}
-        <div className="flex-1 overflow-y-auto bg-[#13131f] custom-scrollbar flex flex-col">
+        <div className="flex-1 overflow-y-auto bg-[#13111c] custom-scrollbar flex flex-col relative">
           
           {/* TASKS TAB */}
           {activeTab === 0 && (
-             <div className="flex flex-col h-full">
-                 <div className="p-6 space-y-8 flex-1">
-                    {categories.map(cat => (
-                        <div key={cat}>
-                            <div className="flex items-center justify-between mb-4 border-b border-white/5 pb-2">
-                                <h3 className="text-sm font-bold text-indigo-400 uppercase tracking-widest pl-1">{cat}s</h3>
-                                <div className="flex gap-2">
-                                     <button onClick={() => setGroupBulk(cat, 'clothed')} className="text-[10px] uppercase font-bold text-indigo-300 hover:text-white bg-indigo-500/10 hover:bg-indigo-500/30 px-2 py-1 rounded transition-colors">All Clothed</button>
-                                     <button onClick={() => setGroupBulk(cat, 'nude')} className="text-[10px] uppercase font-bold text-rose-300 hover:text-white bg-rose-500/10 hover:bg-rose-500/30 px-2 py-1 rounded transition-colors">All Nude</button>
-                                     <button onClick={() => setGroupBulk(cat, 'all')} className="text-[10px] uppercase font-bold text-slate-400 hover:text-white bg-slate-700 px-2 py-1 rounded transition-colors">Select All</button>
-                                     <button onClick={() => setGroupBulk(cat, 'none')} className="text-[10px] uppercase font-bold text-slate-400 hover:text-white bg-slate-700 px-2 py-1 rounded transition-colors">Select None</button>
-                                </div>
-                            </div>
-                            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-                                {TASK_GROUPS.filter(g => g.category === cat).map(g => renderGroupRow(g))}
-                            </div>
-                        </div>
-                    ))}
-                 </div>
+             <div className="p-8 space-y-10 max-w-6xl mx-auto w-full pb-24">
                  
-                 {/* Bulk Actions Footer */}
-                 <div className="p-4 bg-slate-800 border-t border-slate-700 shrink-0 flex items-center justify-between gap-4 sticky bottom-0 z-10">
-                    <span className="text-xs font-bold text-slate-400 uppercase">Global Selection:</span>
-                    <div className="flex gap-2 flex-1">
-                        <button onClick={() => setBulk('clothed')} className="flex-1 py-2 bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/30 text-indigo-300 text-xs font-bold uppercase rounded transition-colors">Select All Clothed</button>
-                        <button onClick={() => setBulk('nude')} className="flex-1 py-2 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 text-rose-300 text-xs font-bold uppercase rounded transition-colors">Select All Nude</button>
-                        <button onClick={() => setBulk('all')} className="flex-1 py-2 bg-slate-700 hover:bg-slate-600 border border-white/10 text-white text-xs font-bold uppercase rounded transition-colors">Select All</button>
-                        <button onClick={() => setBulk('none')} className="flex-1 py-2 bg-slate-700 hover:bg-slate-600 border border-white/10 text-slate-300 text-xs font-bold uppercase rounded transition-colors">Select None</button>
-                    </div>
+                 {/* SCENE SECTION */}
+                 <div>
+                     <div className="flex justify-between items-center mb-4 border-b border-white/5 pb-2">
+                        <h3 className="text-sm font-bold text-purple-400 uppercase tracking-widest">Scenes & Groups</h3>
+                        <div className="flex gap-2">
+                             <button onClick={() => setAll(SCENE_TASKS.map(s => s.id), true)} className="text-[10px] uppercase font-bold text-slate-400 hover:text-white bg-slate-800 px-2 py-1 rounded">All</button>
+                             <button onClick={() => setAll(SCENE_TASKS.map(s => s.id), false)} className="text-[10px] uppercase font-bold text-slate-400 hover:text-white bg-slate-800 px-2 py-1 rounded">None</button>
+                         </div>
+                     </div>
+                     <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                         {SCENE_TASKS.map(task => (
+                             <button 
+                                key={task.id} 
+                                onClick={() => toggleTask(task.id)} 
+                                className={`p-3 rounded-lg border text-left transition-all ${options.taskTypes[task.id] ? 'bg-purple-600/20 border-purple-500/50 ring-1 ring-purple-500/50' : 'bg-slate-800/50 border-white/5 hover:border-white/10'}`}
+                             >
+                                 <div className={`text-xs font-bold uppercase mb-1 ${options.taskTypes[task.id] ? 'text-purple-300' : 'text-slate-400'}`}>{task.label}</div>
+                                 <div className="text-[10px] text-slate-500 truncate">{task.description}</div>
+                             </button>
+                         ))}
+                     </div>
                  </div>
+
+                 {/* FACE SECTION */}
+                 <div>
+                     <div className="flex justify-between items-center mb-4 border-b border-white/5 pb-2">
+                         <h3 className="text-sm font-bold text-purple-400 uppercase tracking-widest">Face Portraits</h3>
+                         <div className="flex gap-2">
+                             <button onClick={() => setAll(FACE_VIEWS.map(f => f.id), true)} className="text-[10px] uppercase font-bold text-slate-400 hover:text-white bg-slate-800 px-2 py-1 rounded">All</button>
+                             <button onClick={() => setAll(FACE_VIEWS.map(f => f.id), false)} className="text-[10px] uppercase font-bold text-slate-400 hover:text-white bg-slate-800 px-2 py-1 rounded">None</button>
+                         </div>
+                     </div>
+                     <div className="grid grid-cols-5 gap-3">
+                         {FACE_VIEWS.map(view => (
+                             <button 
+                                key={view.id} 
+                                onClick={() => toggleTask(view.id)} 
+                                className={`flex flex-col items-center justify-center p-4 rounded-lg border transition-all ${options.taskTypes[view.id] ? 'bg-purple-600 text-white border-purple-500 shadow-lg shadow-purple-900/20' : 'bg-slate-800/50 text-slate-400 border-white/5 hover:bg-slate-700'}`}
+                             >
+                                 <span className="text-xs font-bold uppercase">{view.label}</span>
+                                 {options.taskTypes[view.id] && <Check size={14} className="mt-1" />}
+                             </button>
+                         ))}
+                     </div>
+                 </div>
+
+                 {/* BODY SECTION (Updated with Anatomy/Skeleton) */}
+                 <div>
+                     <div className="flex justify-between items-center mb-4 border-b border-white/5 pb-2">
+                         <h3 className="text-sm font-bold text-purple-400 uppercase tracking-widest">Body Reconstruction</h3>
+                         <div className="flex gap-2">
+                             <button onClick={() => setAll(BODY_VIEWS.flatMap(b => [b.baseId, `${b.baseId}-nude`, `${b.baseId}-anatomy`, `${b.baseId}-skeleton`]), true)} className="text-[10px] uppercase font-bold text-slate-400 hover:text-white bg-slate-800 px-2 py-1 rounded">All</button>
+                             <button onClick={() => setAll(BODY_VIEWS.flatMap(b => [b.baseId, `${b.baseId}-nude`, `${b.baseId}-anatomy`, `${b.baseId}-skeleton`]), false)} className="text-[10px] uppercase font-bold text-slate-400 hover:text-white bg-slate-800 px-2 py-1 rounded">None</button>
+                         </div>
+                     </div>
+                     <div className="bg-slate-800/30 rounded-lg p-1 overflow-x-auto">
+                         <div className="grid grid-cols-6 min-w-[600px] gap-px bg-slate-700/50 rounded overflow-hidden">
+                             {/* Header Row */}
+                             <div className="p-3 bg-slate-800/80 flex items-center justify-center"><span className="text-[10px] uppercase font-bold text-slate-500">View</span></div>
+                             {BODY_VIEWS.map(view => (
+                                 <div key={view.label} className="p-3 bg-slate-800/80 flex items-center justify-center"><span className="text-[10px] uppercase font-bold text-slate-300">{view.label}</span></div>
+                             ))}
+
+                             {/* Clothed Row */}
+                             <div className="p-3 bg-slate-800/80 flex items-center justify-center border-t border-white/5"><span className="text-[10px] uppercase font-bold text-purple-400">Clothed</span></div>
+                             {BODY_VIEWS.map(view => (
+                                 <button 
+                                     key={`c-${view.label}`} 
+                                     onClick={() => toggleTask(view.baseId)}
+                                     className={`p-4 flex items-center justify-center transition-colors border-t border-l border-white/5 ${options.taskTypes[view.baseId] ? 'bg-purple-600/20 text-purple-400' : 'bg-slate-800 hover:bg-slate-700 text-slate-600'}`}
+                                 >
+                                     {options.taskTypes[view.baseId] ? <CheckSquare size={18} /> : <Square size={18} />}
+                                 </button>
+                             ))}
+
+                             {/* Nude Row */}
+                             <div className="p-3 bg-slate-800/80 flex items-center justify-center border-t border-white/5"><span className="text-[10px] uppercase font-bold text-rose-400">Nude</span></div>
+                             {BODY_VIEWS.map(view => (
+                                 <button 
+                                     key={`n-${view.label}`} 
+                                     onClick={() => toggleTask(`${view.baseId}-nude`)}
+                                     className={`p-4 flex items-center justify-center transition-colors border-t border-l border-white/5 ${options.taskTypes[`${view.baseId}-nude`] ? 'bg-rose-600/20 text-rose-400' : 'bg-slate-800 hover:bg-slate-700 text-slate-600'}`}
+                                 >
+                                     {options.taskTypes[`${view.baseId}-nude`] ? <CheckSquare size={18} /> : <Square size={18} />}
+                                 </button>
+                             ))}
+
+                             {/* Anatomy Row */}
+                             <div className="p-3 bg-slate-800/80 flex items-center justify-center border-t border-white/5"><span className="text-[10px] uppercase font-bold text-amber-400">Anatomy</span></div>
+                             {BODY_VIEWS.map(view => (
+                                 <button 
+                                     key={`a-${view.label}`} 
+                                     onClick={() => toggleTask(`${view.baseId}-anatomy`)}
+                                     className={`p-4 flex items-center justify-center transition-colors border-t border-l border-white/5 ${options.taskTypes[`${view.baseId}-anatomy`] ? 'bg-amber-600/20 text-amber-400' : 'bg-slate-800 hover:bg-slate-700 text-slate-600'}`}
+                                 >
+                                     {options.taskTypes[`${view.baseId}-anatomy`] ? <CheckSquare size={18} /> : <Square size={18} />}
+                                 </button>
+                             ))}
+
+                             {/* Skeleton Row */}
+                             <div className="p-3 bg-slate-800/80 flex items-center justify-center border-t border-white/5"><span className="text-[10px] uppercase font-bold text-slate-200">Skeleton</span></div>
+                             {BODY_VIEWS.map(view => (
+                                 <button 
+                                     key={`s-${view.label}`} 
+                                     onClick={() => toggleTask(`${view.baseId}-skeleton`)}
+                                     className={`p-4 flex items-center justify-center transition-colors border-t border-l border-white/5 ${options.taskTypes[`${view.baseId}-skeleton`] ? 'bg-slate-400/20 text-slate-200' : 'bg-slate-800 hover:bg-slate-700 text-slate-600'}`}
+                                 >
+                                     {options.taskTypes[`${view.baseId}-skeleton`] ? <CheckSquare size={18} /> : <Square size={18} />}
+                                 </button>
+                             ))}
+                         </div>
+                     </div>
+                 </div>
+
              </div>
           )}
 
-          {/* ADVANCED TAB */}
+          {/* STYLES TAB */}
           {activeTab === 1 && (
+              <div className="p-8 pb-24 max-w-7xl mx-auto w-full relative">
+                 <div className="flex justify-between items-center mb-6 border-b border-white/5 pb-4 sticky top-0 bg-[#13111c] z-20">
+                     <h3 className="text-lg font-bold text-purple-400 uppercase tracking-widest">Art Styles Library</h3>
+                     <div className="flex gap-2">
+                         <button onClick={resetStyles} className="text-xs uppercase font-bold text-slate-400 hover:text-white bg-slate-800 px-3 py-1.5 rounded flex items-center gap-2"><X size={14}/> Reset Styles</button>
+                     </div>
+                 </div>
+                 
+                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
+                     {STYLES.map(styleKey => {
+                         const def = TASK_DEFINITIONS[styleKey as TaskType];
+                         const nudeKey = `${styleKey}-nude` as TaskType;
+                         const isEnabled = options.taskTypes[styleKey];
+                         const isNudeEnabled = options.taskTypes[nudeKey];
+
+                         return (
+                             <div 
+                                key={styleKey} 
+                                className="rounded-lg border overflow-hidden flex flex-col bg-slate-800/50 border-white/5 relative group"
+                                onMouseEnter={() => setHoveredStyle(styleKey as TaskType)}
+                                onMouseLeave={() => setHoveredStyle(null)}
+                             >
+                                 {/* Header */}
+                                 <div className="px-3 py-2 bg-slate-900/50 border-b border-white/5">
+                                     <div className="text-xs font-bold uppercase text-slate-300 truncate">{def.label}</div>
+                                 </div>
+                                 
+                                 {/* Controls */}
+                                 <div className="flex flex-col">
+                                     <button 
+                                        onClick={() => toggleTask(styleKey)} 
+                                        className={`flex items-center justify-between px-3 py-2 transition-colors border-b border-white/5 ${isEnabled ? 'bg-purple-600/10 text-purple-400' : 'hover:bg-slate-700 text-slate-400'}`}
+                                     >
+                                         <span className="text-[10px] font-bold uppercase">Clothed</span>
+                                         {isEnabled ? <CheckSquare size={14} /> : <Square size={14} />}
+                                     </button>
+                                     
+                                     {TASK_DEFINITIONS[nudeKey] && (
+                                        <button 
+                                            onClick={() => toggleTask(nudeKey)} 
+                                            className={`flex items-center justify-between px-3 py-2 transition-colors ${isNudeEnabled ? 'bg-rose-500/10 text-rose-400' : 'hover:bg-slate-700 text-slate-400'}`}
+                                        >
+                                            <span className="text-[10px] font-bold uppercase">Nude</span>
+                                            {isNudeEnabled ? <CheckSquare size={14} /> : <Square size={14} />}
+                                        </button>
+                                     )}
+                                 </div>
+                             </div>
+                         );
+                     })}
+                 </div>
+
+                 {/* TOOLTIP OVERLAY */}
+                 {hoveredStyle && TASK_DEFINITIONS[hoveredStyle] && (
+                     <div className="fixed bottom-24 right-8 w-80 bg-slate-900 border border-purple-500/30 rounded-lg p-4 shadow-2xl z-30 animate-in slide-in-from-bottom-5 fade-in duration-200 pointer-events-none">
+                         <div className="flex items-center gap-2 mb-2">
+                             <Palette className="text-purple-400 w-4 h-4" />
+                             <h4 className="font-bold text-white text-sm uppercase tracking-wide">{TASK_DEFINITIONS[hoveredStyle].label}</h4>
+                         </div>
+                         <p className="text-xs text-slate-300 leading-relaxed mb-3">{TASK_DEFINITIONS[hoveredStyle].description}</p>
+                         <div className="text-[10px] text-slate-500 font-mono bg-black/30 p-2 rounded border border-white/5">
+                            {/* Extract key definition keywords for context */}
+                            {TASK_DEFINITIONS[hoveredStyle].prompt({gender: 'Female', detailLevel: 'Medium', personDescription: '', customStyle: '', modesty: ''})
+                                .split('STYLE GUIDE:')[1]?.split('\n')[0]?.trim() || "No detailed style guide available."}
+                         </div>
+                     </div>
+                 )}
+              </div>
+          )}
+
+          {/* ADVANCED TAB */}
+          {activeTab === 2 && (
             <div className="p-8 space-y-8 max-w-4xl mx-auto w-full">
               
               {/* Model & Creativity */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <div className="bg-slate-800/40 p-6 rounded-xl border border-white/5">
+                  <div className="bg-slate-800/20 p-6 rounded-xl border border-white/5">
                       <div className="flex items-center space-x-2 mb-4"><Cpu size={20} className="text-purple-400" /><h3 className="text-base font-bold text-slate-200">AI Model</h3></div>
                       <div className="flex bg-slate-900 rounded-lg p-1 border border-white/5">
-                          <button onClick={() => setOptions(prev => ({...prev, modelPreference: 'flash'}))} className={`flex-1 py-3 rounded text-sm font-bold transition-colors ${options.modelPreference === 'flash' ? 'bg-indigo-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'}`}>Flash (Fast)</button>
-                          <button onClick={() => setOptions(prev => ({...prev, modelPreference: 'pro'}))} className={`flex-1 py-3 rounded text-sm font-bold transition-colors ${options.modelPreference === 'pro' ? 'bg-purple-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'}`}>Pro (High Qual)</button>
+                          <button onClick={() => setOptions(prev => ({...prev, modelPreference: 'flash'}))} className={`flex-1 py-3 rounded text-sm font-bold transition-colors ${options.modelPreference === 'flash' ? 'bg-purple-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'}`}>Flash (Fast)</button>
+                          <button onClick={() => setOptions(prev => ({...prev, modelPreference: 'pro'}))} className={`flex-1 py-3 rounded text-sm font-bold transition-colors ${options.modelPreference === 'pro' ? 'bg-purple-800 text-white shadow' : 'text-slate-400 hover:text-slate-200'}`}>Pro (High Qual)</button>
                       </div>
                       <p className="text-xs text-slate-500 mt-3 leading-relaxed">Flash is faster and cheaper. Pro (Gemini 3) follows complex instructions better and supports native 4K.</p>
                   </div>
 
-                  <div className="bg-slate-800/40 p-6 rounded-xl border border-white/5">
+                  <div className="bg-slate-800/20 p-6 rounded-xl border border-white/5">
                       <div className="flex items-center space-x-2 mb-4"><Sparkles size={20} className="text-amber-400" /><h3 className="text-base font-bold text-slate-200">Creativity (Temperature)</h3></div>
                       <input type="range" min="0" max="1" step="0.1" value={options.creativity ?? 0.4} onChange={(e) => setOptions(prev => ({...prev, creativity: parseFloat(e.target.value)}))} className="w-full h-2 bg-slate-700 rounded-lg accent-amber-500 cursor-pointer" />
                       <div className="flex justify-between text-xs font-mono text-slate-400 mt-3"><span>Strict (0.0)</span><span className="text-amber-400 font-bold bg-amber-500/10 px-2 rounded">{options.creativity ?? 0.4}</span><span>Wild (1.0)</span></div>
@@ -297,50 +443,92 @@ const OptionsDialog: React.FC<OptionsDialogProps> = ({ isOpen, onClose, options,
               </div>
 
               {/* Detail Level */}
-              <div className="bg-slate-800/40 p-8 rounded-xl border border-white/5">
-                  <h3 className="text-sm font-bold text-indigo-400 uppercase tracking-widest mb-6">Detail Level</h3>
+              <div className="bg-slate-800/20 p-8 rounded-xl border border-white/5">
+                  <h3 className="text-sm font-bold text-purple-400 uppercase tracking-widest mb-6">Detail Level</h3>
                   <div className="relative pt-2">
-                       <input type="range" min="0" max="4" step="1" value={['Very Low', 'Low', 'Medium', 'High', 'Very High'].indexOf(options.detailLevel)} onChange={(e) => setOptions(prev => ({...prev, detailLevel: ['Very Low', 'Low', 'Medium', 'High', 'Very High'][parseInt(e.target.value)]}))} className="w-full h-2 bg-slate-700 rounded-lg accent-indigo-500 cursor-pointer relative z-10" />
+                       <input type="range" min="0" max="4" step="1" value={['Very Low', 'Low', 'Medium', 'High', 'Very High'].indexOf(options.detailLevel)} onChange={(e) => setOptions(prev => ({...prev, detailLevel: ['Very Low', 'Low', 'Medium', 'High', 'Very High'][parseInt(e.target.value)]}))} className="w-full h-2 bg-slate-700 rounded-lg accent-purple-500 cursor-pointer relative z-10" />
                        <div className="flex justify-between mt-4">
                            {['Very Low', 'Low', 'Medium', 'High', 'Very High'].map((l, i) => (
                                <div key={l} className="flex flex-col items-center cursor-pointer" onClick={() => setOptions(prev => ({...prev, detailLevel: l}))}>
-                                   <div className={`w-1 h-2 mb-2 ${options.detailLevel === l ? 'bg-indigo-500' : 'bg-slate-700'}`}></div>
-                                   <span className={`text-[10px] font-bold uppercase tracking-wider ${options.detailLevel === l ? 'text-indigo-400' : 'text-slate-600'}`}>{l}</span>
+                                   <div className={`w-1 h-2 mb-2 ${options.detailLevel === l ? 'bg-purple-500' : 'bg-slate-700'}`}></div>
+                                   <span className={`text-[10px] font-bold uppercase tracking-wider ${options.detailLevel === l ? 'text-purple-400' : 'text-slate-600'}`}>{l}</span>
                                </div>
                            ))}
                        </div>
                   </div>
               </div>
-
-              {/* Gender */}
-              <div className="bg-slate-800/40 p-6 rounded-xl border border-white/5">
-                  <h3 className="text-sm font-bold text-indigo-400 uppercase tracking-widest mb-4">Target Gender Bias</h3>
-                  <div className="flex flex-wrap gap-3">
-                      {['As-is', 'Female', 'Male', 'Non-binary', 'Transgender'].map(g => (
-                          <button key={g} onClick={() => setOptions(prev => ({...prev, gender: g}))} className={`px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wide border transition-all ${options.gender === g ? 'bg-indigo-600 border-indigo-500 text-white shadow-lg shadow-indigo-500/20' : 'bg-slate-900 border-white/10 text-slate-400 hover:bg-slate-800 hover:border-slate-500'}`}>{g}</button>
-                      ))}
-                  </div>
-                  <p className="text-xs text-slate-500 mt-3"><Info size={12} className="inline mr-1"/> Forces the AI to interpret ambiguous subjects as the selected gender.</p>
-              </div>
-
-              {/* Custom Style */}
-              <div className="bg-slate-800/40 p-6 rounded-xl border border-white/5">
-                  <h3 className="text-sm font-bold text-indigo-400 uppercase tracking-widest mb-4">Custom Style Injection</h3>
-                  <textarea value={options.customStyle || ''} onChange={(e) => setOptions(prev => ({...prev, customStyle: e.target.value}))} placeholder="E.g., 'Art Nouveau', 'Cyberpunk', 'Thick Lines'..." className="w-full h-24 bg-black/30 border border-white/10 rounded-lg p-4 text-sm text-slate-200 resize-none font-mono focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:outline-none placeholder:text-slate-600" />
-                  <p className="text-xs text-slate-500 mt-2">These instructions are appended to the system prompt. Use this to enforce specific artistic directions not covered by presets.</p>
-              </div>
             </div>
           )}
+
+          {/* MODIFIERS TAB */}
+          {activeTab === 3 && (
+              <div className="p-8 space-y-8 max-w-4xl mx-auto w-full">
+                  
+                  {/* MODESTY LAYER */}
+                  <div className="bg-slate-800/20 p-6 rounded-xl border border-white/5">
+                       <div className="flex items-center space-x-2 mb-4"><Shield size={20} className="text-rose-400" /><h3 className="text-base font-bold text-slate-200">Modesty Layer</h3></div>
+                       <p className="text-xs text-slate-500 mb-4">Automatically applies covering elements to nude generations. Does not affect clothed tasks.</p>
+                       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                           {MODESTY_OPTIONS.map(m => (
+                               <button 
+                                 key={m} 
+                                 onClick={() => setOptions(prev => ({...prev, modesty: m}))}
+                                 className={`px-3 py-2 rounded-lg text-xs font-bold uppercase tracking-wide border transition-all ${options.modesty === m ? 'bg-rose-500/20 border-rose-500 text-rose-300' : 'bg-slate-900/50 border-white/5 text-slate-400 hover:bg-slate-800'}`}
+                               >
+                                   {m}
+                               </button>
+                           ))}
+                       </div>
+                  </div>
+
+                  {/* Gender */}
+                  <div className="bg-slate-800/20 p-6 rounded-xl border border-white/5">
+                      <h3 className="text-sm font-bold text-purple-400 uppercase tracking-widest mb-4">Target Gender Bias</h3>
+                      <div className="flex flex-wrap gap-3">
+                          {['As-is', 'Female', 'Male', 'Non-binary', 'Transgender'].map(g => (
+                              <button key={g} onClick={() => setOptions(prev => ({...prev, gender: g}))} className={`px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wide border transition-all ${options.gender === g ? 'bg-purple-600 border-purple-500 text-white shadow-lg shadow-purple-500/20' : 'bg-slate-900 border-white/10 text-slate-400 hover:bg-slate-800 hover:border-slate-500'}`}>{g}</button>
+                          ))}
+                      </div>
+                      <p className="text-xs text-slate-500 mt-3"><Info size={12} className="inline mr-1"/> Forces the AI to interpret ambiguous subjects as the selected gender.</p>
+                  </div>
+
+                  {/* Custom Style */}
+                  <div className="bg-slate-800/20 p-6 rounded-xl border border-white/5">
+                      <h3 className="text-sm font-bold text-purple-400 uppercase tracking-widest mb-4">Custom Style Injection</h3>
+                      <textarea value={options.customStyle || ''} onChange={(e) => setOptions(prev => ({...prev, customStyle: e.target.value}))} placeholder="E.g., 'Art Nouveau', 'Cyberpunk', 'Thick Lines'..." className="w-full h-24 bg-black/30 border border-white/10 rounded-lg p-4 text-sm text-slate-200 resize-none font-mono focus:border-purple-500 focus:ring-1 focus:ring-purple-500 focus:outline-none placeholder:text-slate-600" />
+                      <p className="text-xs text-slate-500 mt-2">These instructions are appended to the system prompt. Use this to enforce specific artistic directions not covered by presets.</p>
+                  </div>
+              </div>
+          )}
+
         </div>
 
         {/* Footer */}
-        <div className="p-4 bg-slate-900/90 border-t border-slate-700 flex justify-between shrink-0 backdrop-blur">
-            <div className="flex space-x-3">
-                <button onClick={handleSaveConfig} className="flex items-center space-x-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-slate-300 hover:text-white transition-colors border border-white/5" title="Save Config"><Download size={16} /> <span>Save Preset</span></button>
-                <button onClick={() => fileInputRef.current?.click()} className="flex items-center space-x-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-slate-300 hover:text-white transition-colors border border-white/5" title="Load Config"><Upload size={16} /> <span>Load Preset</span></button>
-                <input type="file" ref={fileInputRef} hidden accept=".klc" onChange={handleLoadConfig} />
-            </div>
-            <button onClick={onClose} className="px-8 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-bold text-sm shadow-lg shadow-indigo-500/20 transition-all hover:scale-105">Done</button>
+        <div className="p-4 bg-[#1a1825] border-t border-white/5 flex justify-between shrink-0 backdrop-blur z-40">
+            {isSaveMode ? (
+                <div className="flex items-center space-x-2 w-full animate-in fade-in slide-in-from-bottom-2 bg-slate-800 p-1 rounded-lg border border-purple-500/50">
+                    <span className="text-xs font-bold text-purple-400 px-2 uppercase">File Name:</span>
+                    <input 
+                        type="text" 
+                        value={presetName}
+                        onChange={(e) => setPresetName(e.target.value)}
+                        className="bg-black/20 border border-white/10 rounded px-3 py-1.5 text-sm text-white flex-1 focus:ring-1 focus:ring-purple-500 outline-none"
+                        placeholder="Enter preset name..."
+                        autoFocus
+                    />
+                    <button onClick={performSave} className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded font-bold text-xs shadow-lg shadow-emerald-500/20 transition-all">Download .klc</button>
+                    <button onClick={() => setIsSaveMode(false)} className="px-4 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded font-bold text-xs transition-colors">Cancel</button>
+                </div>
+            ) : (
+                <>
+                    <div className="flex space-x-3">
+                        <button onClick={() => setIsSaveMode(true)} className="flex items-center space-x-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-slate-300 hover:text-white transition-colors border border-white/5" title="Save Config"><Download size={16} /> <span>Save Preset</span></button>
+                        <button onClick={() => fileInputRef.current?.click()} className="flex items-center space-x-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-slate-300 hover:text-white transition-colors border border-white/5" title="Load Config"><Upload size={16} /> <span>Load Preset</span></button>
+                        <input type="file" ref={fileInputRef} hidden accept=".klc,.json" onChange={performLoad} />
+                    </div>
+                    <button onClick={onClose} className="px-8 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-lg font-bold text-sm shadow-lg shadow-purple-500/20 transition-all hover:scale-105">Done</button>
+                </>
+            )}
         </div>
       </div>
     </div>

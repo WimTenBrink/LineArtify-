@@ -1,5 +1,8 @@
 
 
+
+
+
 import { GoogleGenAI } from "@google/genai";
 import { LogLevel, GeneratedImage, TaskType, AppOptions } from "../types";
 import { TASK_DEFINITIONS } from "./taskDefinitions";
@@ -280,6 +283,51 @@ export const detectPeople = async (
     }
 };
 
+// NEW: Generate descriptive filename
+export const generateFilename = async (
+    file: File,
+    apiKey: string
+): Promise<string> => {
+    const ai = new GoogleGenAI({ apiKey });
+    const base64Data = await fileToGenerativePart(file);
+
+    const prompt = `
+        Analyze this image and generate a short, descriptive filename for it.
+        Rules:
+        - Use kebab-case (lowercase, hyphens).
+        - Max 5-6 words.
+        - Describe the main subject and activity/vibe.
+        - Do NOT include file extension (like .png).
+        - Do NOT include generic words like "image", "photo", "picture".
+        
+        Example: "cyberpunk-warrior-rain-neon"
+        Example: "cat-sleeping-on-sofa"
+    `;
+
+    try {
+        const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: {
+                parts: [
+                    { inlineData: { mimeType: file.type, data: base64Data } },
+                    { text: prompt }
+                ]
+            },
+            config: {
+               maxOutputTokens: 20
+            }
+        });
+
+        const name = response.text?.trim() || "";
+        // Basic sanitization to ensure valid filename characters
+        return name.replace(/[^a-z0-9-]/gi, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').toLowerCase() || "image";
+
+    } catch (e) {
+        console.error("Failed to generate filename", e);
+        return "image"; // Fallback
+    }
+};
+
 export const generateLineArtTask = async (
   file: File, 
   apiKey: string,
@@ -335,7 +383,8 @@ export const generateLineArtTask = async (
           gender: options.gender,
           detailLevel: options.detailLevel,
           personDescription: sanitizeDescription(personDescription || ''),
-          customStyle: options.customStyle
+          customStyle: options.customStyle,
+          modesty: options.modesty
       });
   } else {
       throw new Error(`Unknown Task Type: ${taskType}`);
@@ -399,7 +448,7 @@ export const generateLineArtTask = async (
          url = await cropToContent(url, 10);
       }
 
-      return { type: taskType, url };
+      return { type: taskType, url, prompt };
 
   } catch (error: any) {
       let friendlyError = error.message;
