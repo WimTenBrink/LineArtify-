@@ -310,6 +310,11 @@ defineStyle('style-disney', 'Disney Classic', 'Renaissance Animation.', "Classic
 defineStyle('style-looney', 'Looney Tunes', 'Chuck Jones / Tex Avery.', "Looney Tunes style. Exaggerated takes, wild expressions, stretch and squash, dynamic energy, slapstick aesthetic.");
 defineStyle('style-archies', 'Archie Comics', 'Classic Dan DeCarlo.', "Classic Archie Comics style (Dan DeCarlo). Wholesome Americana, idealized teen proportions, clean heavy outlines, fashion focus.");
 
+// --- NEW EROTIC/DYNAMIC STYLES ---
+defineStyle('style-manara', 'Milo Manara', 'Erotic Italian comic style.', "Style of Milo Manara. Sensual, elegant lines, soft shading implied by contour, focus on feminine beauty, detailed backgrounds, sophisticated eroticism.");
+defineStyle('style-fenzo', 'Stelio Fenzo', 'Italian dynamic comic.', "Style of Stelio Fenzo (Jungla). Dynamic action, clean clear lines, Italian adventure comic aesthetic, expressive figures.");
+
+
 // --- EASTERN / MANGA / ANIME ---
 defineStyle('style-toriyama', 'Toriyama', 'Dragon Ball style.', "Style of Akira Toriyama. Angular eyes, spiky hair, distinct muscle definition, clean mechanical details, dynamic fighting poses.");
 defineStyle('style-ghibli', 'Ghibli', 'Miyazaki style.', "Style of Hayao Miyazaki (Studio Ghibli). Soft natural lines, detailed hair movement, realistic clothing folds, emotional facial expressions, pastoral details.");

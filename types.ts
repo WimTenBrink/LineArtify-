@@ -65,6 +65,8 @@ export type TaskType =
   'style-disney' | 'style-disney-nude' |
   'style-looney' | 'style-looney-nude' |
   'style-archies' | 'style-archies-nude' |
+  'style-manara' | 'style-manara-nude' |
+  'style-fenzo' | 'style-fenzo-nude' |
 
   // --- STYLES (New Expansion - Eastern) ---
   'style-toriyama' | 'style-toriyama-nude' |
