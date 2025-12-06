@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useLogger } from './services/loggerService';
 import { generateLineArtTask, detectPeople, generateFilename } from './services/geminiService';
@@ -487,7 +488,8 @@ export default function App() {
            timestamp: Date.now(), 
            options: currentOptionsSnapshot,
            // Initial display name is file name until generated
-           displayName: undefined 
+           displayName: undefined,
+           priorityCount: 0
        });
     });
     if (newUploads.length > 0) {
@@ -723,13 +725,22 @@ export default function App() {
           }
           return j;
       }));
+
+      // Increment priority count for sorting
+      setUploads(prev => prev.map(u => u.id === sourceId ? { ...u, priorityCount: (u.priorityCount || 0) + 1 } : u));
+
       addLog(LogLevel.INFO, `Prioritized ${pendingForSource.length} jobs for source.`);
   };
 
   const downloadImage = (url: string, sourceId: string, taskType: string) => {
       const source = uploads.find(u => u.id === sourceId);
+      
+      // Get clean style name from definition
+      const def = TASK_DEFINITIONS[taskType as TaskType];
+      const stylePrefix = def ? def.label.replace(/\s+/g, '') : taskType;
+
       const baseName = source?.displayName || source?.file.name.replace(/\.[^/.]+$/, "") || "image";
-      const filename = `${taskType}-${baseName}.png`;
+      const filename = `${stylePrefix}-${baseName}.png`;
       
       const link = document.createElement('a'); link.href = url; link.download = filename;
       document.body.appendChild(link); link.click(); document.body.removeChild(link);
@@ -825,6 +836,17 @@ export default function App() {
   }, [queue, queueControls, processingJobs, options, uploads, maxConcurrent]);
 
   const handleJobError = (job: QueueItem, message: string, isSafety: boolean) => {
+      // Adaptive Throttling for Overloaded errors
+      if (message.includes('503') || message.includes('Overloaded')) {
+          setMaxConcurrent(prev => {
+              const newVal = Math.max(3, prev - 1);
+              if (newVal !== prev) {
+                  addLog(LogLevel.WARN, `System overloaded. Reducing max concurrency to ${newVal}.`);
+              }
+              return newVal;
+          });
+      }
+
       addLog(LogLevel.WARN, `Job Failed: ${message}`);
       setQueue(prev => prev.map(i => {
           if (i.id !== job.id) return i;
@@ -916,7 +938,7 @@ export default function App() {
               if (data.uploads) {
                   const newUploads = await Promise.all(data.uploads.map(async (u: any) => {
                       const res = await fetch(u.data); const blob = await res.blob(); const file = new File([blob], u.file.name, { type: u.file.type });
-                      return { ...u, file, thumbnailUrl: URL.createObjectURL(file), options: u.options || options };
+                      return { ...u, file, thumbnailUrl: URL.createObjectURL(file), options: u.options || options, priorityCount: u.priorityCount || 0 };
                   }));
                   const unique = newUploads.filter(nu => !uploads.some(u => u.file.name === nu.file.name));
                   setUploads(prev => [...prev, ...unique]); populateQueues(unique);
@@ -958,7 +980,13 @@ export default function App() {
       return 'border-white/5';
   };
 
-  const sortedUploads = [...uploads].sort((a, b) => a.file.name.localeCompare(b.file.name));
+  // Sort uploads by Priority first, then Name
+  const sortedUploads = [...uploads].sort((a, b) => {
+      const pA = a.priorityCount || 0;
+      const pB = b.priorityCount || 0;
+      if (pA !== pB) return pB - pA; // Higher priority first
+      return a.file.name.localeCompare(b.file.name);
+  });
 
   const queueViews: { id: QueueViewGroup, label: string, icon: any, description: string }[] = [
     { id: 'UPLOADS', label: 'Uploads', icon: Upload, description: "Manage source images" },
@@ -1120,6 +1148,16 @@ export default function App() {
                         <div className="relative">
                             <img src={upload.thumbnailUrl} className="w-full h-auto max-h-[50vh] object-cover opacity-70 group-hover:opacity-100" />
                             <div className="absolute top-2 left-2 z-20"><div className={`p-1 rounded bg-black/50 backdrop-blur ${isSelected ? 'text-emerald-400' : 'text-slate-400'}`}>{isSelected ? <CheckSquare size={20} /> : <Square size={20} />}</div></div>
+                            
+                            {/* Priority Badge */}
+                            {(upload.priorityCount || 0) > 0 && (
+                                <div className="absolute top-2 left-8 z-30 animate-in zoom-in">
+                                    <div className="bg-amber-500 text-black text-[10px] font-bold px-1.5 py-0.5 rounded shadow-lg border border-amber-400 flex items-center gap-0.5" title="Times Prioritized">
+                                       <ChevronsUp size={10} strokeWidth={3} /> {upload.priorityCount}
+                                    </div>
+                                </div>
+                            )}
+
                             {totalSourceJobs > 0 && (
                                 <div className="absolute top-2 right-2 flex flex-col items-end gap-1 z-20">
                                     <div className="bg-black/60 backdrop-blur text-white text-[10px] px-2 py-1 rounded-full font-mono font-bold border border-white/10 shadow-lg">

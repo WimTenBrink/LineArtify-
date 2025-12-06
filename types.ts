@@ -144,7 +144,8 @@ export interface SourceImage {
   thumbnailUrl: string;
   displayName?: string; // Generated Name
   timestamp: number;
-  options: AppOptions; 
+  options: AppOptions;
+  priorityCount?: number; 
 }
 
 export interface QueueItem {

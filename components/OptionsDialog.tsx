@@ -1,5 +1,3 @@
-
-
 import React, { useState, useRef } from 'react';
 import { X, Layers, Settings, Save, Upload, Download, Cpu, Sparkles, CheckSquare, Square, Info, Check, Shield, Palette, Sliders } from 'lucide-react';
 import { AppOptions, TaskType, PriorityLevel } from '../types';
@@ -83,6 +81,7 @@ const OptionsDialog: React.FC<OptionsDialogProps> = ({ isOpen, onClose, options,
   const [isSaveMode, setIsSaveMode] = useState(false);
   const [presetName, setPresetName] = useState("lineartify-preset");
   const [hoveredStyle, setHoveredStyle] = useState<TaskType | null>(null);
+  const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   if (!isOpen) return null;
@@ -350,7 +349,10 @@ const OptionsDialog: React.FC<OptionsDialogProps> = ({ isOpen, onClose, options,
 
           {/* STYLES TAB */}
           {activeTab === 1 && (
-              <div className="p-8 pb-24 max-w-7xl mx-auto w-full relative">
+              <div 
+                  className="p-8 pb-24 max-w-7xl mx-auto w-full relative"
+                  onMouseMove={(e) => setMousePos({ x: e.clientX, y: e.clientY })}
+              >
                  <div className="flex justify-between items-center mb-6 border-b border-white/5 pb-4 sticky top-0 bg-[#13111c] z-20">
                      <h3 className="text-lg font-bold text-purple-400 uppercase tracking-widest">Art Styles Library</h3>
                      <div className="flex gap-2">
@@ -404,13 +406,20 @@ const OptionsDialog: React.FC<OptionsDialogProps> = ({ isOpen, onClose, options,
 
                  {/* TOOLTIP OVERLAY */}
                  {hoveredStyle && TASK_DEFINITIONS[hoveredStyle] && (
-                     <div className="fixed bottom-24 right-8 w-80 bg-slate-900 border border-purple-500/30 rounded-lg p-4 shadow-2xl z-30 animate-in slide-in-from-bottom-5 fade-in duration-200 pointer-events-none">
-                         <div className="flex items-center gap-2 mb-2">
-                             <Palette className="text-purple-400 w-4 h-4" />
-                             <h4 className="font-bold text-white text-sm uppercase tracking-wide">{TASK_DEFINITIONS[hoveredStyle].label}</h4>
+                     <div 
+                         className="fixed z-50 bg-slate-900/95 border border-purple-500/50 p-6 rounded-xl shadow-2xl backdrop-blur-md pointer-events-none min-w-[320px] max-w-[400px]"
+                         style={{
+                             top: mousePos.y, // Slightly offset Y to not cover cursor
+                             left: mousePos.x > window.innerWidth / 2 ? mousePos.x - 370 : mousePos.x + 50,
+                             transform: 'translateY(-50%)'
+                         }}
+                     >
+                         <div className="flex items-center gap-3 mb-3">
+                             <Palette className="text-purple-400 w-6 h-6" />
+                             <h4 className="font-bold text-white text-xl uppercase tracking-wide">{TASK_DEFINITIONS[hoveredStyle].label}</h4>
                          </div>
-                         <p className="text-xs text-slate-300 leading-relaxed mb-3">{TASK_DEFINITIONS[hoveredStyle].description}</p>
-                         <div className="text-[10px] text-slate-500 font-mono bg-black/30 p-2 rounded border border-white/5">
+                         <p className="text-sm text-slate-300 leading-relaxed mb-4 font-medium">{TASK_DEFINITIONS[hoveredStyle].description}</p>
+                         <div className="text-xs text-slate-400 font-mono bg-black/40 p-3 rounded border border-white/10 leading-relaxed">
                             {/* Extract key definition keywords for context */}
                             {TASK_DEFINITIONS[hoveredStyle].prompt({gender: 'Female', detailLevel: 'Medium', personDescription: '', customStyle: '', modesty: ''})
                                 .split('STYLE GUIDE:')[1]?.split('\n')[0]?.trim() || "No detailed style guide available."}
