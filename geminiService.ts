@@ -1,4 +1,5 @@
-import { GoogleGenAI, HarmCategory, HarmBlockThreshold } from "@google/genai";
+
+import { GoogleGenAI } from "@google/genai";
 import { LogLevel, GeneratedImage, TaskType, AppOptions } from "../types";
 import { TASK_DEFINITIONS } from "./taskDefinitions";
 
@@ -193,11 +194,11 @@ const extractImageFromResponse = (response: any, logTitle: string): string => {
 
 // Complete safety settings including Civic Integrity to minimize blocks
 const SAFETY_SETTINGS_BLOCK_NONE = [
-    { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
-    { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
-    { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
-    { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
-    { category: HarmCategory.HARM_CATEGORY_CIVIC_INTEGRITY, threshold: HarmBlockThreshold.BLOCK_NONE }
+    { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
+    { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
+    { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' },
+    { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
+    { category: 'HARM_CATEGORY_CIVIC_INTEGRITY', threshold: 'BLOCK_NONE' }
 ];
 
 const sanitizeDescription = (text: string): string => {
@@ -277,14 +278,7 @@ export const detectPeople = async (
             }
             
             if (!response.candidates || response.candidates.length === 0) {
-                 throw new Error("No candidates received");
-            }
-
-            // Check for Safety Block explicitly
-            const finishReason = response.candidates[0].finishReason;
-            if (finishReason === "SAFETY" || finishReason === "PROHIBITED_CONTENT") {
-                 addLog(LogLevel.WARN, `Scanner blocked by safety policy for ${file.name}. Assuming 0 people.`);
-                 return []; // Safely return empty list instead of throwing
+                throw new Error(`No candidates received from Gemini for ${file.name} (Scanner).`);
             }
 
             const text = response.text || "[]";
@@ -336,7 +330,6 @@ export const generateFilename = async (
         - Describe the main subject and activity/vibe.
         - Do NOT include file extension (like .png).
         - Do NOT include generic words like "image", "photo", "picture".
-        - IGNORE any text, watermarks, or websites written on the image. Describe the visual content only.
         
         Example: "cyberpunk-warrior-rain-neon"
         Example: "cat-sleeping-on-sofa"
@@ -352,8 +345,7 @@ export const generateFilename = async (
                 ]
             },
             config: {
-               maxOutputTokens: 20,
-               safetySettings: SAFETY_SETTINGS_BLOCK_NONE
+               maxOutputTokens: 20
             }
         };
 

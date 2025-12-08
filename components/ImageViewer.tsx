@@ -40,9 +40,21 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onRepeat, onDe
 
   const handleWheel = (e: React.WheelEvent) => {
     e.stopPropagation();
-    const delta = e.deltaY * -0.001;
+    // Adjusted sensitivity to be slightly faster for standard mice, still smooth for trackpads
+    const delta = e.deltaY * -0.002;
     const newScale = Math.min(Math.max(0.1, scale + delta), 8);
     setScale(newScale);
+  };
+
+  const handleDoubleClick = () => {
+    if (scale > 1.5) {
+        // Reset if already zoomed in
+        reset();
+    } else {
+        // Zoom to 300%
+        setScale(3);
+        setPosition({ x: 0, y: 0 });
+    }
   };
 
   const handleMouseDown = (e: React.MouseEvent) => {
@@ -224,6 +236,7 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onRepeat, onDe
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
           onMouseLeave={handleMouseUp}
+          onDoubleClick={handleDoubleClick}
           style={{
              backgroundImage: 'linear-gradient(45deg, #eee 25%, transparent 25%), linear-gradient(-45deg, #eee 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #eee 75%), linear-gradient(-45deg, transparent 75%, #eee 75%)',
              backgroundSize: '20px 20px',

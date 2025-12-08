@@ -34,11 +34,11 @@ export const LoggerProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     else if (level === LogLevel.WARN) console.warn(title, details);
     else console.log(`[${level}] ${title}`, details);
 
-    // Update state, keeping only the last 100 logs
+    // Update state, keeping only the last 1000 logs (increased from 100)
     setLogs((prev) => {
       const updated = [newLog, ...prev];
-      if (updated.length > 100) {
-        return updated.slice(0, 100);
+      if (updated.length > 1000) {
+        return updated.slice(0, 1000);
       }
       return updated;
     });

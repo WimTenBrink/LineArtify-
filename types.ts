@@ -1,3 +1,4 @@
+
 export enum ProcessingStatus {
   PENDING = 'PENDING',
   PROCESSING = 'PROCESSING',
@@ -205,13 +206,18 @@ export interface QueueItem {
   result?: GeneratedImage;
   errorMessage?: string;
   timestamp: number;
-  retryCount: number; 
+  retryCount: number; // Kept for legacy/compatibility, but logic uses counts below
   maxRetries: number; 
   errorHistory: string[];
   isBlocked?: boolean; 
   isLastChance?: boolean; 
   priority: number; // 1-100, default 50
   customPriority?: number; // kept for legacy or additional manual tweaks
+  isPaused?: boolean; // New field for Pausing jobs
+
+  // Persistent Error Counters
+  failureCount: number; // Max 5
+  prohibitedCount: number; // Max 2
 }
 
 export interface StyleStat {

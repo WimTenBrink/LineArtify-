@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useLogger } from '../services/loggerService';
 import { LogLevel, LogEntry } from '../types';
-import { Terminal, X, Copy, ChevronRight, ChevronDown, Trash2 } from 'lucide-react';
+import { Terminal, X, Copy, ChevronRight, ChevronDown, Trash2, ChevronLeft } from 'lucide-react';
 
 interface ConsoleProps {
   isOpen: boolean;
@@ -11,6 +11,12 @@ interface ConsoleProps {
 const Console: React.FC<ConsoleProps> = ({ isOpen, onClose }) => {
   const { logs, clearLogs } = useLogger();
   const [activeTab, setActiveTab] = useState<string>('ALL');
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 50;
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [activeTab]);
 
   if (!isOpen) return null;
 
@@ -21,7 +27,6 @@ const Console: React.FC<ConsoleProps> = ({ isOpen, onClose }) => {
     { id: LogLevel.ERROR, label: 'Errors' },
     { id: LogLevel.GEMINI_REQUEST, label: 'Gemini Req' },
     { id: LogLevel.GEMINI_RESPONSE, label: 'Gemini Res' },
-    // Imagen placeholders for completeness as requested
     { id: LogLevel.IMAGEN_REQUEST, label: 'Imagen Req' },
     { id: LogLevel.IMAGEN_RESPONSE, label: 'Imagen Res' },
   ];
@@ -29,6 +34,15 @@ const Console: React.FC<ConsoleProps> = ({ isOpen, onClose }) => {
   const filteredLogs = activeTab === 'ALL' 
     ? logs 
     : logs.filter(l => l.level === activeTab);
+
+  const totalPages = Math.ceil(filteredLogs.length / itemsPerPage);
+  const currentLogs = filteredLogs.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
+
+  const handlePageChange = (newPage: number) => {
+    if (newPage >= 1 && newPage <= totalPages) {
+      setCurrentPage(newPage);
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
@@ -38,6 +52,9 @@ const Console: React.FC<ConsoleProps> = ({ isOpen, onClose }) => {
           <div className="flex items-center space-x-2 text-indigo-400">
             <Terminal size={20} />
             <h2 className="font-mono font-bold text-lg">System Console</h2>
+            <span className="text-xs text-slate-500 font-mono ml-2">
+                ({filteredLogs.length} entries)
+            </span>
           </div>
           <div className="flex items-center space-x-3">
              <button 
@@ -74,13 +91,38 @@ const Console: React.FC<ConsoleProps> = ({ isOpen, onClose }) => {
         </div>
 
         {/* Log List */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-[#1e1e2e]">
+        <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-[#1e1e2e] custom-scrollbar">
           {filteredLogs.length === 0 ? (
             <div className="text-center text-slate-500 mt-20 font-mono">No logs found for this filter.</div>
           ) : (
-            filteredLogs.map(log => <LogItem key={log.id} log={log} />)
+            currentLogs.map(log => <LogItem key={log.id} log={log} />)
           )}
         </div>
+
+        {/* Pagination Controls */}
+        {totalPages > 1 && (
+            <div className="px-4 py-3 bg-slate-800 border-t border-slate-700 flex items-center justify-between">
+                <div className="text-xs text-slate-400 font-mono">
+                    Page {currentPage} of {totalPages}
+                </div>
+                <div className="flex items-center space-x-2">
+                    <button 
+                        onClick={() => handlePageChange(currentPage - 1)}
+                        disabled={currentPage === 1}
+                        className="p-1.5 rounded hover:bg-slate-700 text-slate-300 disabled:opacity-30 disabled:cursor-not-allowed"
+                    >
+                        <ChevronLeft size={16} />
+                    </button>
+                    <button 
+                        onClick={() => handlePageChange(currentPage + 1)}
+                        disabled={currentPage === totalPages}
+                        className="p-1.5 rounded hover:bg-slate-700 text-slate-300 disabled:opacity-30 disabled:cursor-not-allowed"
+                    >
+                        <ChevronRight size={16} />
+                    </button>
+                </div>
+            </div>
+        )}
       </div>
     </div>
   );

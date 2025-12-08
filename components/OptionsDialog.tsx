@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { X, Layers, Settings, Save, Upload, Download, Cpu, Sparkles, CheckSquare, Square, Info, Check, Shield, Palette, Sliders, Scissors, PenTool, Eraser, ChevronDown, ChevronRight, FileImage, Minus } from 'lucide-react';
-import { AppOptions, TaskType, PriorityLevel } from '../types';
+import { X, Layers, Settings, Save, Upload, Cpu, Sparkles, CheckSquare, Square, Info, Check, Shield, Palette, PenTool, ChevronDown, ChevronRight, FileImage, Minus, Scissors } from 'lucide-react';
+import { AppOptions, TaskType } from '../types';
 import { TASK_DEFINITIONS } from '../services/taskDefinitions';
 
 interface OptionsDialogProps {
@@ -181,8 +181,6 @@ const OptionsDialog: React.FC<OptionsDialogProps> = ({ isOpen, onClose, options,
   };
 
   const toggleVariant = (keys: string[], currentState: string) => {
-      // Logic: If partial, setting to checked (true) is standard. 
-      // If Checked -> Uncheck. If Unchecked -> Check.
       const targetState = currentState === 'checked' ? false : true;
       setOptions(prev => {
           const next = { ...prev.taskTypes };
@@ -218,6 +216,7 @@ const OptionsDialog: React.FC<OptionsDialogProps> = ({ isOpen, onClose, options,
     let nude = 0;
     let topless = 0;
     let bottomless = 0;
+    let background = 0;
 
     Object.entries(options.taskTypes).forEach(([key, enabled]) => {
         if (!enabled) return;
@@ -227,7 +226,9 @@ const OptionsDialog: React.FC<OptionsDialogProps> = ({ isOpen, onClose, options,
         if (!def || def.category === 'Utility') return;
 
         total++;
-        if (key.endsWith('-nude') || key === 'all-people-nude' || key === 'full-nude') {
+        if (key === 'background') {
+            background++;
+        } else if (key.endsWith('-nude') || key === 'all-people-nude' || key === 'full-nude') {
             nude++;
         } else if (key.endsWith('-topless')) {
             topless++;
@@ -238,7 +239,7 @@ const OptionsDialog: React.FC<OptionsDialogProps> = ({ isOpen, onClose, options,
         }
     });
 
-    return { total, clothed, nude, topless, bottomless };
+    return { total, clothed, nude, topless, bottomless, background };
   }, [options.taskTypes]);
 
   if (!isOpen) return null;
@@ -286,7 +287,6 @@ const OptionsDialog: React.FC<OptionsDialogProps> = ({ isOpen, onClose, options,
       
       BODY_HAIR_ZONES.forEach(zone => {
           if (exemptZones.includes(zone.id)) {
-              // Set to default (delete key or explicitly set Default)
               newHair[zone.id] = 'Default';
           } else {
               newHair[zone.id] = 'None';
@@ -300,7 +300,6 @@ const OptionsDialog: React.FC<OptionsDialogProps> = ({ isOpen, onClose, options,
         const finalName = presetName.trim() || "lineartify-preset";
         const fullName = finalName.endsWith('.klc') ? finalName : `${finalName}.klc`;
 
-        // Create a structured save object
         const savePackage = {
             version: 2,
             type: 'lineartify-preset',
@@ -330,11 +329,10 @@ const OptionsDialog: React.FC<OptionsDialogProps> = ({ isOpen, onClose, options,
         document.body.appendChild(link);
         link.click();
 
-        // Cleanup
         setTimeout(() => {
             document.body.removeChild(link);
             URL.revokeObjectURL(url);
-            setIsSaveMode(false); // Reset UI
+            setIsSaveMode(false);
         }, 100);
 
     } catch (err) {
@@ -354,15 +352,11 @@ const OptionsDialog: React.FC<OptionsDialogProps> = ({ isOpen, onClose, options,
             if (!text) throw new Error("File is empty");
 
             const parsed = JSON.parse(text);
-            
-            // Handle both legacy (raw options) and new (structured) formats
             let loadedOptions: Partial<AppOptions> = {};
 
             if (parsed.type === 'lineartify-preset' && parsed.data) {
-                // New Format
                 loadedOptions = parsed.data;
             } else if (parsed.taskTypes || parsed.gender) {
-                // Legacy/Raw Format
                 loadedOptions = parsed;
             } else {
                 throw new Error("Unrecognized preset format");
@@ -407,12 +401,16 @@ const OptionsDialog: React.FC<OptionsDialogProps> = ({ isOpen, onClose, options,
              <Settings className="text-white" size={24} />
              <h2 className="text-xl font-bold text-white tracking-tight">Configuration</h2>
              
-             {/* Stats Badge */}
+             {/* Detailed Stats Badge */}
              <div className="flex gap-2 ml-4">
                  <div className="px-2 py-1 bg-black/40 rounded text-[10px] font-mono border border-white/5 text-slate-400" title="Total Tasks Enabled">
                     Total: <span className="text-white font-bold">{stats.total}</span>
                  </div>
+                 {stats.clothed > 0 && <div className="px-2 py-1 bg-indigo-900/40 rounded text-[10px] font-mono border border-indigo-500/20 text-indigo-300">Clothed: {stats.clothed}</div>}
+                 {stats.background > 0 && <div className="px-2 py-1 bg-cyan-900/40 rounded text-[10px] font-mono border border-cyan-500/20 text-cyan-300">Bkg: {stats.background}</div>}
                  {stats.nude > 0 && <div className="px-2 py-1 bg-purple-900/40 rounded text-[10px] font-mono border border-purple-500/20 text-purple-300">Nude: {stats.nude}</div>}
+                 {stats.topless > 0 && <div className="px-2 py-1 bg-pink-900/40 rounded text-[10px] font-mono border border-pink-500/20 text-pink-300">Topless: {stats.topless}</div>}
+                 {stats.bottomless > 0 && <div className="px-2 py-1 bg-rose-900/40 rounded text-[10px] font-mono border border-rose-500/20 text-rose-300">Botless: {stats.bottomless}</div>}
              </div>
           </div>
           <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-full transition-colors">
@@ -502,7 +500,6 @@ const OptionsDialog: React.FC<OptionsDialogProps> = ({ isOpen, onClose, options,
                                             <td className="py-3 px-2 font-bold text-slate-300">{view.label}</td>
                                             {['', '-nude', '-anatomy', '-skeleton'].map(suffix => {
                                                 const id = `${view.baseId}${suffix}`;
-                                                // Handle naming quirks (legacy vs new)
                                                 let finalId = id;
                                                 if (id === 'backside-nude') finalId = 'nude-opposite'; // Legacy map
 
@@ -619,10 +616,8 @@ const OptionsDialog: React.FC<OptionsDialogProps> = ({ isOpen, onClose, options,
 
                     {/* Style Groups */}
                     {STYLE_SUBCATEGORIES.map(category => {
-                        // Find all tasks in this category
                         const stylesInCat = Object.keys(TASK_DEFINITIONS).filter(k => {
                             const def = TASK_DEFINITIONS[k as TaskType];
-                            // Base style definition is the clothed one (no suffixes)
                             return def.category === 'Style' && def.subCategory === category && !k.includes('-nude') && !k.includes('-topless') && !k.includes('-bottomless');
                         });
                         
@@ -650,77 +645,32 @@ const OptionsDialog: React.FC<OptionsDialogProps> = ({ isOpen, onClose, options,
                                         <div className="flex items-center gap-2 mb-2 px-2 py-1.5 bg-white/5 rounded border border-white/5">
                                              <span className="text-[10px] uppercase font-bold text-slate-500 mr-auto">Select {category}:</span>
                                              
-                                             {/* Clothed */}
-                                             <button
-                                                 onClick={(e) => {
-                                                     e.stopPropagation();
-                                                     const keys = getSubgroupKeys(category, 'clothed');
-                                                     toggleVariant(keys, getVariantState(keys));
-                                                 }}
-                                                 className={`w-10 h-6 flex items-center justify-center rounded border transition-colors ${
-                                                     getVariantState(getSubgroupKeys(category, 'clothed')) !== 'unchecked'
-                                                     ? 'bg-indigo-600 border-indigo-500 text-white'
-                                                     : 'bg-slate-800 border-slate-600 text-slate-400'
-                                                 }`}
-                                                 title="Toggle All Clothed in Category"
-                                             >
-                                                 {getVariantState(getSubgroupKeys(category, 'clothed')) === 'checked' ? <CheckSquare size={14} /> : 
-                                                  getVariantState(getSubgroupKeys(category, 'clothed')) === 'partial' ? <Minus size={14} /> : <Square size={14} />}
-                                             </button>
-
-                                             {/* Nude */}
-                                             <button
-                                                 onClick={(e) => {
-                                                     e.stopPropagation();
-                                                     const keys = getSubgroupKeys(category, 'nude');
-                                                     toggleVariant(keys, getVariantState(keys));
-                                                 }}
-                                                 className={`w-10 h-6 flex items-center justify-center rounded border transition-colors ${
-                                                     getVariantState(getSubgroupKeys(category, 'nude')) !== 'unchecked'
-                                                     ? 'bg-purple-600 border-purple-500 text-white'
-                                                     : 'bg-slate-800 border-slate-600 text-slate-400'
-                                                 }`}
-                                                 title="Toggle All Nude in Category"
-                                             >
-                                                 {getVariantState(getSubgroupKeys(category, 'nude')) === 'checked' ? <CheckSquare size={14} /> : 
-                                                  getVariantState(getSubgroupKeys(category, 'nude')) === 'partial' ? <Minus size={14} /> : <Square size={14} />}
-                                             </button>
-
-                                             {/* Topless */}
-                                             <button
-                                                 onClick={(e) => {
-                                                     e.stopPropagation();
-                                                     const keys = getSubgroupKeys(category, 'topless');
-                                                     toggleVariant(keys, getVariantState(keys));
-                                                 }}
-                                                 className={`w-10 h-6 flex items-center justify-center rounded border transition-colors ${
-                                                     getVariantState(getSubgroupKeys(category, 'topless')) !== 'unchecked'
-                                                     ? 'bg-pink-600 border-pink-500 text-white'
-                                                     : 'bg-slate-800 border-slate-600 text-slate-400'
-                                                 }`}
-                                                 title="Toggle All Topless in Category"
-                                             >
-                                                 {getVariantState(getSubgroupKeys(category, 'topless')) === 'checked' ? <CheckSquare size={14} /> : 
-                                                  getVariantState(getSubgroupKeys(category, 'topless')) === 'partial' ? <Minus size={14} /> : <Square size={14} />}
-                                             </button>
-
-                                             {/* Bottomless */}
-                                             <button
-                                                 onClick={(e) => {
-                                                     e.stopPropagation();
-                                                     const keys = getSubgroupKeys(category, 'bottomless');
-                                                     toggleVariant(keys, getVariantState(keys));
-                                                 }}
-                                                 className={`w-10 h-6 flex items-center justify-center rounded border transition-colors ${
-                                                     getVariantState(getSubgroupKeys(category, 'bottomless')) !== 'unchecked'
-                                                     ? 'bg-rose-600 border-rose-500 text-white'
-                                                     : 'bg-slate-800 border-slate-600 text-slate-400'
-                                                 }`}
-                                                 title="Toggle All Bottomless in Category"
-                                             >
-                                                 {getVariantState(getSubgroupKeys(category, 'bottomless')) === 'checked' ? <CheckSquare size={14} /> : 
-                                                  getVariantState(getSubgroupKeys(category, 'bottomless')) === 'partial' ? <Minus size={14} /> : <Square size={14} />}
-                                             </button>
+                                             {['clothed', 'nude', 'topless', 'bottomless'].map((variant, idx) => {
+                                                  const keys = getSubgroupKeys(category, variant as any);
+                                                  const state = getVariantState(keys);
+                                                  const colors = [
+                                                      'bg-indigo-600 border-indigo-500 text-white',
+                                                      'bg-purple-600 border-purple-500 text-white',
+                                                      'bg-pink-600 border-pink-500 text-white',
+                                                      'bg-rose-600 border-rose-500 text-white'
+                                                  ];
+                                                  
+                                                  return (
+                                                      <button
+                                                         key={variant}
+                                                         onClick={(e) => {
+                                                             e.stopPropagation();
+                                                             toggleVariant(keys, state);
+                                                         }}
+                                                         className={`w-10 h-6 flex items-center justify-center rounded border transition-colors ${
+                                                             state !== 'unchecked' ? colors[idx] : 'bg-slate-800 border-slate-600 text-slate-400'
+                                                         }`}
+                                                         title={`Toggle All ${variant} in Category`}
+                                                     >
+                                                         {state === 'checked' ? <CheckSquare size={14} /> : state === 'partial' ? <Minus size={14} /> : <Square size={14} />}
+                                                     </button>
+                                                  );
+                                             })}
                                         </div>
 
                                         {/* Header Row */}
@@ -742,7 +692,6 @@ const OptionsDialog: React.FC<OptionsDialogProps> = ({ isOpen, onClose, options,
                                                 bottomless: `${styleId}-bottomless`
                                             };
                                             
-                                            // Tooltip logic
                                             const isHovered = hoveredStyle === styleId;
 
                                             return (
@@ -776,10 +725,10 @@ const OptionsDialog: React.FC<OptionsDialogProps> = ({ isOpen, onClose, options,
                                                                     onClick={() => toggleTask(vid)}
                                                                     className={`w-5 h-5 rounded flex items-center justify-center transition-colors border ${
                                                                         options.taskTypes[vid]
-                                                                        ? idx === 0 ? 'bg-indigo-600 border-indigo-500 text-white' // Clothed
-                                                                          : idx === 1 ? 'bg-purple-600 border-purple-500 text-white' // Nude
-                                                                          : idx === 2 ? 'bg-pink-600 border-pink-500 text-white' // Topless
-                                                                          : 'bg-rose-600 border-rose-500 text-white' // Bottomless
+                                                                        ? idx === 0 ? 'bg-indigo-600 border-indigo-500 text-white' 
+                                                                          : idx === 1 ? 'bg-purple-600 border-purple-500 text-white' 
+                                                                          : idx === 2 ? 'bg-pink-600 border-pink-500 text-white' 
+                                                                          : 'bg-rose-600 border-rose-500 text-white' 
                                                                         : 'bg-slate-800 border-slate-600 hover:border-white/50'
                                                                     }`}
                                                                 >
@@ -831,35 +780,26 @@ const OptionsDialog: React.FC<OptionsDialogProps> = ({ isOpen, onClose, options,
                                 </button>
                             ))}
                         </div>
-                        <p className="mt-2 text-[10px] text-slate-500">Forces the AI to interpret subjects as specific gender. "As-is" respects original image.</p>
                     </div>
 
                     {/* Output Format Section */}
                     <div className="bg-slate-800/30 p-4 rounded-xl border border-white/5">
                         <label className="text-sm font-bold text-slate-300 uppercase mb-3 block">Output Format</label>
                         <div className="grid grid-cols-2 gap-3">
-                             <button
-                                onClick={() => setOptions(prev => ({ ...prev, outputFormat: 'png' }))}
-                                className={`flex flex-col items-center p-3 rounded-lg border transition-all ${
-                                    options.outputFormat === 'png' 
-                                    ? 'bg-blue-900/40 border-blue-500 text-blue-200' 
-                                    : 'bg-slate-800 border-white/5 text-slate-400 hover:bg-slate-700'
-                                }`}
-                             >
-                                 <span className="font-bold text-lg">PNG</span>
-                                 <span className="text-[10px] opacity-70">Transparency Supported</span>
-                             </button>
-                             <button
-                                onClick={() => setOptions(prev => ({ ...prev, outputFormat: 'jpg' }))}
-                                className={`flex flex-col items-center p-3 rounded-lg border transition-all ${
-                                    options.outputFormat === 'jpg' 
-                                    ? 'bg-blue-900/40 border-blue-500 text-blue-200' 
-                                    : 'bg-slate-800 border-white/5 text-slate-400 hover:bg-slate-700'
-                                }`}
-                             >
-                                 <span className="font-bold text-lg">JPG</span>
-                                 <span className="text-[10px] opacity-70">EXIF Data Included</span>
-                             </button>
+                             {['png', 'jpg'].map(fmt => (
+                                 <button
+                                    key={fmt}
+                                    onClick={() => setOptions(prev => ({ ...prev, outputFormat: fmt as any }))}
+                                    className={`flex flex-col items-center p-3 rounded-lg border transition-all ${
+                                        options.outputFormat === fmt
+                                        ? 'bg-blue-900/40 border-blue-500 text-blue-200' 
+                                        : 'bg-slate-800 border-white/5 text-slate-400 hover:bg-slate-700'
+                                    }`}
+                                 >
+                                     <span className="font-bold text-lg uppercase">{fmt}</span>
+                                     <span className="text-[10px] opacity-70">{fmt === 'png' ? 'Transparency' : 'EXIF Data'}</span>
+                                 </button>
+                             ))}
                         </div>
                     </div>
 
@@ -872,16 +812,15 @@ const OptionsDialog: React.FC<OptionsDialogProps> = ({ isOpen, onClose, options,
                                     onClick={() => setOptions(prev => ({ ...prev, modelPreference: 'flash' }))}
                                     className={`flex-1 py-2 rounded text-xs font-bold transition-all ${options.modelPreference === 'flash' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'}`}
                                 >
-                                    Gemini 2.5 Flash (Fast)
+                                    Gemini 2.5 Flash
                                 </button>
                                 <button 
                                     onClick={() => setOptions(prev => ({ ...prev, modelPreference: 'pro' }))}
                                     className={`flex-1 py-2 rounded text-xs font-bold transition-all ${options.modelPreference === 'pro' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'}`}
                                 >
-                                    Gemini 3 Pro (High Quality)
+                                    Gemini 3 Pro
                                 </button>
                             </div>
-                            {options.modelPreference === 'pro' && <p className="mt-2 text-[10px] text-amber-400 flex items-center gap-1"><Info size={12} /> Pro model incurs higher API costs.</p>}
                         </div>
 
                         <div className="mb-4">
@@ -911,11 +850,6 @@ const OptionsDialog: React.FC<OptionsDialogProps> = ({ isOpen, onClose, options,
                                 onChange={(e) => setOptions(prev => ({ ...prev, creativity: parseFloat(e.target.value) }))}
                                 className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-indigo-500"
                              />
-                             <div className="flex justify-between text-[10px] text-slate-500 mt-1 font-mono uppercase">
-                                 <span>Strict (0.0)</span>
-                                 <span>Balanced (0.4)</span>
-                                 <span>Wild (1.0)</span>
-                             </div>
                         </div>
                     </div>
                 </div>
@@ -927,7 +861,7 @@ const OptionsDialog: React.FC<OptionsDialogProps> = ({ isOpen, onClose, options,
                     <div className="bg-slate-800/30 p-4 rounded-xl border border-white/5">
                         <h3 className="text-sm font-bold text-slate-300 uppercase mb-2 flex items-center gap-2"><Shield size={16}/> Modesty Layer</h3>
                         <p className="text-xs text-slate-400 mb-4">
-                            Automatically adds covering elements to "Nude" tasks to ensure generated content remains safe or artistic while preserving anatomy.
+                            Automatically adds covering elements to "Nude" tasks.
                         </p>
                         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 max-h-[60vh] overflow-y-auto pr-2 custom-scrollbar">
                             {MODESTY_OPTIONS.map(opt => (
@@ -954,14 +888,14 @@ const OptionsDialog: React.FC<OptionsDialogProps> = ({ isOpen, onClose, options,
                     <div className="flex items-center justify-between">
                          <h3 className="text-sm font-bold text-slate-300 uppercase">Zone Density Control</h3>
                          <div className="flex gap-2">
-                             <button onClick={setSmoothBodyHair} className="px-3 py-1 bg-slate-800 hover:bg-indigo-600 text-white text-xs rounded border border-white/10 transition-colors">Smooth Body Preset</button>
-                             <button onClick={resetBodyHair} className="px-3 py-1 bg-slate-800 hover:bg-red-500 text-white text-xs rounded border border-white/10 transition-colors">Reset Default</button>
+                             <button onClick={setSmoothBodyHair} className="px-3 py-1 bg-slate-800 hover:bg-indigo-600 text-white text-xs rounded border border-white/10 transition-colors">Smooth</button>
+                             <button onClick={resetBodyHair} className="px-3 py-1 bg-slate-800 hover:bg-red-500 text-white text-xs rounded border border-white/10 transition-colors">Reset</button>
                          </div>
                     </div>
 
                     {HAIR_GROUPS.map(group => (
                         <div key={group} className="bg-slate-800/30 p-4 rounded-xl border border-white/5">
-                            <h4 className="text-xs font-bold text-slate-500 uppercase mb-3 border-b border-white/5 pb-1">{group} Zones</h4>
+                            <h4 className="text-xs font-bold text-slate-500 uppercase mb-3 border-b border-white/5 pb-1">{group}</h4>
                             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                                 {BODY_HAIR_ZONES.filter(z => z.group === group).map(zone => {
                                     const currentVal = options.bodyHair[zone.id] || 'Default';
@@ -993,7 +927,7 @@ const OptionsDialog: React.FC<OptionsDialogProps> = ({ isOpen, onClose, options,
                          <h3 className="text-sm font-bold text-slate-300 uppercase mb-2">Additional Prompt Instructions</h3>
                          <textarea 
                              className="flex-1 min-h-[150px] bg-black/40 border border-white/10 rounded-lg p-3 text-sm text-white focus:border-indigo-500 outline-none resize-none font-mono"
-                             placeholder="Enter specific instructions here (e.g. 'Make everyone wear glasses', 'Cyberpunk city background', 'Sketchy lines')..."
+                             placeholder="Enter specific instructions here..."
                              value={options.customStyle}
                              onChange={(e) => setOptions(prev => ({ ...prev, customStyle: e.target.value }))}
                          />
@@ -1038,10 +972,10 @@ const OptionsDialog: React.FC<OptionsDialogProps> = ({ isOpen, onClose, options,
                  ) : (
                      <>
                         <button onClick={() => setIsSaveMode(true)} className="flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-xs font-bold transition-colors border border-white/5">
-                            <Save size={16} /> Save Preset
+                            <Save size={16} /> Save
                         </button>
                         <button onClick={() => fileInputRef.current?.click()} className="flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-xs font-bold transition-colors border border-white/5">
-                            <Upload size={16} /> Load Preset
+                            <Upload size={16} /> Load
                         </button>
                         <input type="file" ref={fileInputRef} className="hidden" accept=".json,.klc" onChange={performLoad} />
                      </>
