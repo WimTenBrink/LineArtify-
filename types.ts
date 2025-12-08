@@ -214,6 +214,12 @@ export interface QueueItem {
   customPriority?: number; // kept for legacy or additional manual tweaks
 }
 
+export interface StyleStat {
+  success: number;
+  failure: number;
+  prohibited: number;
+}
+
 export enum LogLevel {
   INFO = 'INFO',
   WARN = 'WARN',

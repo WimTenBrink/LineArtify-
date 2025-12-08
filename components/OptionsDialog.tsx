@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { X, Layers, Settings, Save, Upload, Download, Cpu, Sparkles, CheckSquare, Square, Info, Check, Shield, Palette, Sliders, Scissors, PenTool, Eraser, ChevronDown, ChevronRight, FileImage } from 'lucide-react';
+import { X, Layers, Settings, Save, Upload, Download, Cpu, Sparkles, CheckSquare, Square, Info, Check, Shield, Palette, Sliders, Scissors, PenTool, Eraser, ChevronDown, ChevronRight, FileImage, Minus } from 'lucide-react';
 import { AppOptions, TaskType, PriorityLevel } from '../types';
 import { TASK_DEFINITIONS } from '../services/taskDefinitions';
 
@@ -152,6 +152,65 @@ const OptionsDialog: React.FC<OptionsDialogProps> = ({ isOpen, onClose, options,
         setExpandedCategories(initialExpanded);
     }
   }, [isOpen]); // Re-evaluate when dialog opens
+
+  // Helper for Tri-state Style Selection
+  const styleVariantKeys = useMemo(() => {
+    const clothed: string[] = [];
+    const nude: string[] = [];
+    const topless: string[] = [];
+    const bottomless: string[] = [];
+
+    Object.keys(TASK_DEFINITIONS).forEach(k => {
+        const def = TASK_DEFINITIONS[k as TaskType];
+        if (def.category !== 'Style') return;
+
+        if (k.endsWith('-nude')) nude.push(k);
+        else if (k.endsWith('-topless')) topless.push(k);
+        else if (k.endsWith('-bottomless')) bottomless.push(k);
+        else clothed.push(k);
+    });
+    return { clothed, nude, topless, bottomless };
+  }, []);
+
+  const getVariantState = (keys: string[]) => {
+      if (keys.length === 0) return 'unchecked';
+      const enabledCount = keys.filter(k => options.taskTypes[k]).length;
+      if (enabledCount === 0) return 'unchecked';
+      if (enabledCount === keys.length) return 'checked';
+      return 'partial';
+  };
+
+  const toggleVariant = (keys: string[], currentState: string) => {
+      // Logic: If partial, setting to checked (true) is standard. 
+      // If Checked -> Uncheck. If Unchecked -> Check.
+      const targetState = currentState === 'checked' ? false : true;
+      setOptions(prev => {
+          const next = { ...prev.taskTypes };
+          keys.forEach(k => { next[k] = targetState; });
+          return { ...prev, taskTypes: next };
+      });
+  };
+
+  // Helper for Subgroup Variants
+  const getSubgroupKeys = (category: string, variant: 'clothed' | 'nude' | 'topless' | 'bottomless') => {
+      return Object.keys(TASK_DEFINITIONS).filter(k => {
+          const def = TASK_DEFINITIONS[k as TaskType];
+          // Check category
+          if (def.category !== 'Style' || def.subCategory !== category) return false;
+          
+          // Check variant based on suffix
+          const isNude = k.endsWith('-nude');
+          const isTopless = k.endsWith('-topless');
+          const isBottomless = k.endsWith('-bottomless');
+          const isClothed = !isNude && !isTopless && !isBottomless;
+
+          if (variant === 'clothed') return isClothed;
+          if (variant === 'nude') return isNude;
+          if (variant === 'topless') return isTopless;
+          if (variant === 'bottomless') return isBottomless;
+          return false;
+      });
+  };
 
   const stats = useMemo(() => {
     let total = 0;
@@ -329,583 +388,674 @@ const OptionsDialog: React.FC<OptionsDialogProps> = ({ isOpen, onClose, options,
                     ...(loadedOptions.bodyHair || {})
                 }
             }));
-            
-        } catch (err) {
-            console.error("Load failed:", err);
-            alert("Failed to load preset. Invalid file.");
+
+        } catch (e) {
+            console.error("Failed to load preset", e);
+            alert("Invalid preset file.");
         }
     };
     reader.readAsText(file);
-    e.target.value = ''; // Reset to allow reloading same file
   };
-
-  const setAll = (keys: string[], val: boolean) => {
-      setOptions(prev => {
-          const next = { ...prev.taskTypes };
-          keys.forEach(k => { if(TASK_DEFINITIONS[k as TaskType]) next[k] = val; });
-          return { ...prev, taskTypes: next };
-      });
-  };
-  
-  const resetStyles = () => {
-       const styleKeys: string[] = [];
-       // Helper to collect style keys
-       Object.keys(TASK_DEFINITIONS).forEach(k => {
-           const def = TASK_DEFINITIONS[k as TaskType];
-           if (def.category === 'Style') styleKeys.push(k);
-       });
-       setAll(styleKeys, false);
-  };
-
-  const getTabClass = (index: number) => `flex-1 py-4 text-sm font-bold uppercase tracking-wide flex items-center justify-center gap-2 transition-colors border-b-2 ${activeTab === index ? 'text-purple-400 border-purple-500 bg-[#2d2a3d]' : 'text-slate-400 border-transparent hover:bg-[#2d2a3d]/50 hover:text-slate-200'}`;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm text-slate-200">
-      <div className="bg-[#1e1c2e] w-[95vw] h-[95vh] rounded-xl shadow-2xl flex flex-col border border-white/10 overflow-hidden">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
+      <div className="bg-[#1e1c2e] w-[1000px] max-w-[95vw] h-[90vh] rounded-xl shadow-2xl flex flex-col border border-white/10 overflow-hidden relative">
         
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 bg-[#252233] border-b border-white/5 shrink-0">
-          <div className="flex items-center gap-4">
-              <h2 className="text-xl font-bold text-white tracking-tight">Configuration</h2>
-              
-              {/* Stats Badge */}
-              <div className="hidden md:flex items-center gap-3 text-xs font-mono bg-black/20 px-3 py-1.5 rounded-lg border border-white/5">
-                  <div className="flex items-center gap-1.5 pr-3 border-r border-white/10">
-                      <span className="text-slate-400 font-bold uppercase">Est. Images</span>
-                      <span className="text-white font-bold text-sm">{stats.total}</span>
-                  </div>
-                  <div className="flex items-center gap-3">
-                       {stats.clothed > 0 && <span className="text-purple-400 font-bold">{stats.clothed} Clothed</span>}
-                       {stats.nude > 0 && <span className="text-rose-400 font-bold">{stats.nude} Nude</span>}
-                       {stats.topless > 0 && <span className="text-amber-400 font-bold">{stats.topless} Topless</span>}
-                       {stats.bottomless > 0 && <span className="text-amber-400 font-bold">{stats.bottomless} Bottomless</span>}
-                       {stats.total === 0 && <span className="text-slate-600 italic">No tasks selected</span>}
-                  </div>
-              </div>
-          </div>
-          <button onClick={onClose} className="p-1 hover:bg-white/10 rounded-full transition-colors"><X size={24} className="text-slate-400 hover:text-white" /></button>
-        </div>
-
-        {/* Tabs */}
-        <div className="flex border-b border-white/5 bg-[#1a1825] shrink-0">
-           <button onClick={() => setActiveTab(0)} className={getTabClass(0)}><Layers size={16} /> Tasks</button>
-           <button onClick={() => setActiveTab(1)} className={getTabClass(1)}><Palette size={16} /> Styles</button>
-           <button onClick={() => setActiveTab(2)} className={getTabClass(2)}><Cpu size={16} /> Advanced</button>
-           <button onClick={() => setActiveTab(3)} className={getTabClass(3)}><Sliders size={16} /> Modifiers</button>
-           <button onClick={() => setActiveTab(4)} className={getTabClass(4)}><Scissors size={16} /> Hair</button>
-           <button onClick={() => setActiveTab(5)} className={getTabClass(5)}><PenTool size={16} /> Custom</button>
-        </div>
-
-        {/* Content */}
-        <div className="flex-1 overflow-y-auto bg-[#13111c] custom-scrollbar flex flex-col relative">
-          
-          {/* TASKS TAB */}
-          {activeTab === 0 && (
-             <div className="p-8 space-y-10 max-w-6xl mx-auto w-full pb-24">
-                 
-                 {/* SCENE SECTION */}
-                 <div>
-                     <div className="flex justify-between items-center mb-4 border-b border-white/5 pb-2">
-                        <h3 className="text-sm font-bold text-purple-400 uppercase tracking-widest">Scenes & Groups</h3>
-                        <div className="flex gap-2">
-                             <button onClick={() => setAll(SCENE_TASKS.map(s => s.id), true)} className="text-[10px] uppercase font-bold text-slate-400 hover:text-white bg-slate-800 px-2 py-1 rounded">All</button>
-                             <button onClick={() => setAll(SCENE_TASKS.map(s => s.id), false)} className="text-[10px] uppercase font-bold text-slate-400 hover:text-white bg-slate-800 px-2 py-1 rounded">None</button>
-                         </div>
-                     </div>
-                     <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-                         {SCENE_TASKS.map(task => (
-                             <button 
-                                key={task.id} 
-                                onClick={() => toggleTask(task.id)} 
-                                className={`p-3 rounded-lg border text-left transition-all ${options.taskTypes[task.id] ? 'bg-purple-600/20 border-purple-500/50 ring-1 ring-purple-500/50' : 'bg-slate-800/50 border-white/5 hover:border-white/10'}`}
-                             >
-                                 <div className={`text-xs font-bold uppercase mb-1 ${options.taskTypes[task.id] ? 'text-purple-300' : 'text-slate-400'}`}>{task.label}</div>
-                                 <div className="text-[10px] text-slate-500 truncate">{task.description}</div>
-                             </button>
-                         ))}
-                     </div>
+          <div className="flex items-center gap-3">
+             <Settings className="text-white" size={24} />
+             <h2 className="text-xl font-bold text-white tracking-tight">Configuration</h2>
+             
+             {/* Stats Badge */}
+             <div className="flex gap-2 ml-4">
+                 <div className="px-2 py-1 bg-black/40 rounded text-[10px] font-mono border border-white/5 text-slate-400" title="Total Tasks Enabled">
+                    Total: <span className="text-white font-bold">{stats.total}</span>
                  </div>
-
-                 {/* FACE SECTION */}
-                 <div>
-                     <div className="flex justify-between items-center mb-4 border-b border-white/5 pb-2">
-                         <h3 className="text-sm font-bold text-purple-400 uppercase tracking-widest">Face Portraits</h3>
-                         <div className="flex gap-2">
-                             <button onClick={() => setAll(FACE_VIEWS.map(f => f.id), true)} className="text-[10px] uppercase font-bold text-slate-400 hover:text-white bg-slate-800 px-2 py-1 rounded">All</button>
-                             <button onClick={() => setAll(FACE_VIEWS.map(f => f.id), false)} className="text-[10px] uppercase font-bold text-slate-400 hover:text-white bg-slate-800 px-2 py-1 rounded">None</button>
-                         </div>
-                     </div>
-                     <div className="grid grid-cols-5 gap-3">
-                         {FACE_VIEWS.map(view => (
-                             <button 
-                                key={view.id} 
-                                onClick={() => toggleTask(view.id)} 
-                                className={`flex flex-col items-center justify-center p-4 rounded-lg border transition-all ${options.taskTypes[view.id] ? 'bg-purple-600 text-white border-purple-500 shadow-lg shadow-purple-900/20' : 'bg-slate-800/50 text-slate-400 border-white/5 hover:bg-slate-700'}`}
-                             >
-                                 <span className="text-xs font-bold uppercase">{view.label}</span>
-                                 {options.taskTypes[view.id] && <Check size={14} className="mt-1" />}
-                             </button>
-                         ))}
-                     </div>
-                 </div>
-
-                 {/* BODY SECTION (Updated with Anatomy/Skeleton) */}
-                 <div>
-                     <div className="flex justify-between items-center mb-4 border-b border-white/5 pb-2">
-                         <h3 className="text-sm font-bold text-purple-400 uppercase tracking-widest">Body Reconstruction</h3>
-                         <div className="flex gap-2">
-                             <button onClick={() => setAll(BODY_VIEWS.flatMap(b => [b.baseId, `${b.baseId}-nude`, `${b.baseId}-anatomy`, `${b.baseId}-skeleton`]), true)} className="text-[10px] uppercase font-bold text-slate-400 hover:text-white bg-slate-800 px-2 py-1 rounded">All</button>
-                             <button onClick={() => setAll(BODY_VIEWS.flatMap(b => [b.baseId, `${b.baseId}-nude`, `${b.baseId}-anatomy`, `${b.baseId}-skeleton`]), false)} className="text-[10px] uppercase font-bold text-slate-400 hover:text-white bg-slate-800 px-2 py-1 rounded">None</button>
-                         </div>
-                     </div>
-                     <div className="bg-slate-800/30 rounded-lg p-1 overflow-x-auto">
-                         <div className="grid grid-cols-6 min-w-[600px] gap-px bg-slate-700/50 rounded overflow-hidden">
-                             {/* Header Row */}
-                             <div className="p-3 bg-slate-800/80 flex items-center justify-center"><span className="text-[10px] uppercase font-bold text-slate-500">View</span></div>
-                             {BODY_VIEWS.map(view => (
-                                 <div key={view.label} className="p-3 bg-slate-800/80 flex items-center justify-center"><span className="text-[10px] uppercase font-bold text-slate-300">{view.label}</span></div>
-                             ))}
-
-                             {/* Clothed Row */}
-                             <div className="p-3 bg-slate-800/80 flex items-center justify-center border-t border-white/5"><span className="text-[10px] uppercase font-bold text-purple-400">Clothed</span></div>
-                             {BODY_VIEWS.map(view => (
-                                 <button 
-                                     key={`c-${view.label}`} 
-                                     onClick={() => toggleTask(view.baseId)}
-                                     className={`p-4 flex items-center justify-center transition-colors border-t border-l border-white/5 ${options.taskTypes[view.baseId] ? 'bg-purple-600/20 text-purple-400' : 'bg-slate-800 hover:bg-slate-700 text-slate-600'}`}
-                                 >
-                                     {options.taskTypes[view.baseId] ? <CheckSquare size={18} /> : <Square size={18} />}
-                                 </button>
-                             ))}
-
-                             {/* Nude Row */}
-                             <div className="p-3 bg-slate-800/80 flex items-center justify-center border-t border-white/5"><span className="text-[10px] uppercase font-bold text-rose-400">Nude</span></div>
-                             {BODY_VIEWS.map(view => (
-                                 <button 
-                                     key={`n-${view.label}`} 
-                                     onClick={() => toggleTask(`${view.baseId}-nude`)}
-                                     className={`p-4 flex items-center justify-center transition-colors border-t border-l border-white/5 ${options.taskTypes[`${view.baseId}-nude`] ? 'bg-rose-600/20 text-rose-400' : 'bg-slate-800 hover:bg-slate-700 text-slate-600'}`}
-                                 >
-                                     {options.taskTypes[`${view.baseId}-nude`] ? <CheckSquare size={18} /> : <Square size={18} />}
-                                 </button>
-                             ))}
-
-                             {/* Anatomy Row */}
-                             <div className="p-3 bg-slate-800/80 flex items-center justify-center border-t border-white/5"><span className="text-[10px] uppercase font-bold text-amber-400">Anatomy</span></div>
-                             {BODY_VIEWS.map(view => (
-                                 <button 
-                                     key={`a-${view.label}`} 
-                                     onClick={() => toggleTask(`${view.baseId}-anatomy`)}
-                                     className={`p-4 flex items-center justify-center transition-colors border-t border-l border-white/5 ${options.taskTypes[`${view.baseId}-anatomy`] ? 'bg-amber-600/20 text-amber-400' : 'bg-slate-800 hover:bg-slate-700 text-slate-600'}`}
-                                 >
-                                     {options.taskTypes[`${view.baseId}-anatomy`] ? <CheckSquare size={18} /> : <Square size={18} />}
-                                 </button>
-                             ))}
-
-                             {/* Skeleton Row */}
-                             <div className="p-3 bg-slate-800/80 flex items-center justify-center border-t border-white/5"><span className="text-[10px] uppercase font-bold text-slate-200">Skeleton</span></div>
-                             {BODY_VIEWS.map(view => (
-                                 <button 
-                                     key={`s-${view.label}`} 
-                                     onClick={() => toggleTask(`${view.baseId}-skeleton`)}
-                                     className={`p-4 flex items-center justify-center transition-colors border-t border-l border-white/5 ${options.taskTypes[`${view.baseId}-skeleton`] ? 'bg-slate-400/20 text-slate-200' : 'bg-slate-800 hover:bg-slate-700 text-slate-600'}`}
-                                 >
-                                     {options.taskTypes[`${view.baseId}-skeleton`] ? <CheckSquare size={18} /> : <Square size={18} />}
-                                 </button>
-                             ))}
-                         </div>
-                     </div>
-                 </div>
-
+                 {stats.nude > 0 && <div className="px-2 py-1 bg-purple-900/40 rounded text-[10px] font-mono border border-purple-500/20 text-purple-300">Nude: {stats.nude}</div>}
              </div>
-          )}
+          </div>
+          <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-full transition-colors">
+            <X size={24} className="text-slate-400 hover:text-white" />
+          </button>
+        </div>
 
-          {/* STYLES TAB */}
-          {activeTab === 1 && (
-              <div 
-                  className="p-8 pb-24 max-w-7xl mx-auto w-full relative"
-                  onMouseMove={(e) => setMousePos({ x: e.clientX, y: e.clientY })}
-              >
-                 <div className="flex justify-between items-center mb-6 border-b border-white/5 pb-4 sticky top-0 bg-[#13111c] z-20">
-                     <h3 className="text-lg font-bold text-purple-400 uppercase tracking-widest">Art Styles Library</h3>
-                     <div className="flex gap-2">
-                         <button onClick={resetStyles} className="text-xs uppercase font-bold text-slate-400 hover:text-white bg-slate-800 px-3 py-1.5 rounded flex items-center gap-2"><X size={14}/> Reset Styles</button>
-                     </div>
-                 </div>
-                 
-                 <div className="space-y-4">
-                 {STYLE_SUBCATEGORIES.map(category => {
-                     const catStyles = Object.keys(TASK_DEFINITIONS)
-                         .filter(k => {
-                             const def = TASK_DEFINITIONS[k as TaskType];
-                             return def.category === 'Style' && !k.endsWith('-nude') && !k.endsWith('-topless') && !k.endsWith('-bottomless') && (def.subCategory === category || (!def.subCategory && category === 'Misc'));
-                         })
-                         .sort((a, b) => TASK_DEFINITIONS[a as TaskType].label.localeCompare(TASK_DEFINITIONS[b as TaskType].label));
-                     
-                     if (catStyles.length === 0) return null;
+        {/* Tab Navigation */}
+        <div className="flex border-b border-white/5 bg-[#1a1825] shrink-0 overflow-x-auto scrollbar-hide">
+             {[
+               { id: 0, label: 'Tasks', icon: Layers },
+               { id: 1, label: 'Art Styles Library', icon: Palette },
+               { id: 2, label: 'Advanced', icon: Cpu },
+               { id: 3, label: 'Modifiers', icon: Shield },
+               { id: 4, label: 'Body Hair', icon: Scissors },
+               { id: 5, label: 'Custom', icon: PenTool },
+             ].map(tab => {
+                 const Icon = tab.icon;
+                 return (
+                     <button
+                        key={tab.id}
+                        onClick={() => setActiveTab(tab.id)}
+                        className={`flex items-center gap-2 px-6 py-4 text-xs font-bold uppercase tracking-wide transition-colors border-b-2 whitespace-nowrap ${
+                            activeTab === tab.id 
+                            ? 'border-indigo-500 text-indigo-400 bg-[#2d2a3d]' 
+                            : 'border-transparent text-slate-500 hover:text-slate-300 hover:bg-[#2d2a3d]/50'
+                        }`}
+                     >
+                        <Icon size={16} /> {tab.label}
+                     </button>
+                 );
+             })}
+        </div>
 
-                     const isExpanded = expandedCategories[category];
+        {/* Tab Content */}
+        <div className="flex-1 overflow-y-auto p-6 custom-scrollbar bg-[#13111c] relative">
+            
+            {/* TAB 0: TASKS */}
+            {activeTab === 0 && (
+                <div className="space-y-8">
+                    
+                    {/* Scene Tasks */}
+                    <div className="bg-slate-800/30 p-4 rounded-xl border border-white/5">
+                        <h3 className="text-sm font-bold text-slate-300 uppercase mb-4 flex items-center gap-2"><FileImage size={16}/> Scene Extraction</h3>
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                            {SCENE_TASKS.map(task => (
+                                <div 
+                                    key={task.id}
+                                    onClick={() => toggleTask(task.id)}
+                                    className={`flex items-center p-3 rounded-lg border cursor-pointer transition-all ${
+                                        options.taskTypes[task.id] 
+                                        ? 'bg-indigo-600 border-indigo-500 shadow-lg shadow-indigo-500/20' 
+                                        : 'bg-slate-800 border-white/5 hover:border-indigo-500/50 hover:bg-slate-700'
+                                    }`}
+                                >
+                                    <div className={`w-5 h-5 rounded border flex items-center justify-center mr-3 ${
+                                        options.taskTypes[task.id] ? 'bg-white border-white text-indigo-600' : 'border-slate-500 bg-transparent'
+                                    }`}>
+                                        {options.taskTypes[task.id] && <Check size={14} strokeWidth={4} />}
+                                    </div>
+                                    <div>
+                                        <div className="font-bold text-sm text-white">{task.label}</div>
+                                        <div className="text-[10px] text-slate-400 font-mono">{task.description}</div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
 
-                     // Counts
-                     const clothedCount = catStyles.filter(k => options.taskTypes[k]).length;
-                     const nudeCount = catStyles.filter(k => options.taskTypes[`${k}-nude` as TaskType]).length;
-                     const toplessCount = catStyles.filter(k => options.taskTypes[`${k}-topless` as TaskType]).length;
-                     const bottomlessCount = catStyles.filter(k => options.taskTypes[`${k}-bottomless` as TaskType]).length;
-                     
-                     return (
-                         <div key={category} className="border border-white/5 rounded-lg bg-slate-800/20 overflow-hidden">
-                             {/* Category Header */}
-                             <div 
-                                onClick={() => toggleCategory(category)}
-                                className="px-4 py-3 bg-slate-800/50 flex items-center justify-between cursor-pointer hover:bg-slate-700/50 transition-colors"
-                             >
-                                 <div className="flex items-center gap-3">
-                                     <div className={`transition-transform duration-200 ${isExpanded ? 'rotate-90' : ''}`}>
-                                        <ChevronRight size={18} className="text-slate-400" />
-                                     </div>
-                                     <h4 className="text-sm font-bold text-indigo-400 uppercase tracking-widest">{category}</h4>
-                                 </div>
-                                 <div className="flex items-center gap-3 text-[10px] font-bold uppercase text-slate-500">
-                                     {clothedCount > 0 && <span className="text-purple-400">{clothedCount} Clothed</span>}
-                                     {nudeCount > 0 && <span className="text-rose-400">{nudeCount} Nude</span>}
-                                     {(toplessCount > 0 || bottomlessCount > 0) && <span className="text-amber-400">{toplessCount + bottomlessCount} Partial</span>}
-                                     {clothedCount === 0 && nudeCount === 0 && toplessCount === 0 && bottomlessCount === 0 && <span className="opacity-50">No Selection</span>}
-                                 </div>
-                             </div>
+                    {/* Body Views */}
+                    <div className="bg-slate-800/30 p-4 rounded-xl border border-white/5">
+                         <h3 className="text-sm font-bold text-slate-300 uppercase mb-4 flex items-center gap-2"><Layers size={16}/> Body Reconstruction</h3>
+                         <div className="overflow-x-auto">
+                            <table className="w-full text-left text-sm">
+                                <thead>
+                                    <tr className="border-b border-white/5 text-xs text-slate-500 font-mono uppercase">
+                                        <th className="py-2 px-2">Angle</th>
+                                        <th className="py-2 px-2">Clothed</th>
+                                        <th className="py-2 px-2 text-purple-400">Nude</th>
+                                        <th className="py-2 px-2 text-pink-400">Anatomy</th>
+                                        <th className="py-2 px-2 text-slate-400">Skeleton</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-white/5">
+                                    {BODY_VIEWS.map(view => (
+                                        <tr key={view.baseId} className="hover:bg-white/5">
+                                            <td className="py-3 px-2 font-bold text-slate-300">{view.label}</td>
+                                            {['', '-nude', '-anatomy', '-skeleton'].map(suffix => {
+                                                const id = `${view.baseId}${suffix}`;
+                                                // Handle naming quirks (legacy vs new)
+                                                let finalId = id;
+                                                if (id === 'backside-nude') finalId = 'nude-opposite'; // Legacy map
 
-                             {isExpanded && (
-                                <div className="p-4 grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 animate-in fade-in slide-in-from-top-2">
-                                    {catStyles.map(styleKey => {
-                                        const def = TASK_DEFINITIONS[styleKey as TaskType];
-                                        const nudeKey = `${styleKey}-nude` as TaskType;
-                                        const toplessKey = `${styleKey}-topless` as TaskType;
-                                        const bottomlessKey = `${styleKey}-bottomless` as TaskType;
+                                                if (!TASK_DEFINITIONS[finalId as TaskType]) return <td key={suffix}></td>;
 
-                                        const isEnabled = options.taskTypes[styleKey];
-                                        const isNudeEnabled = options.taskTypes[nudeKey];
-                                        const isToplessEnabled = options.taskTypes[toplessKey];
-                                        const isBottomlessEnabled = options.taskTypes[bottomlessKey];
-
-                                        const priority = options.stylePriorities?.[styleKey] || 1;
-
-                                        return (
-                                            <div 
-                                                key={styleKey} 
-                                                className="rounded-lg border overflow-hidden flex flex-col bg-slate-800/50 border-white/5 relative group"
-                                                onMouseEnter={() => setHoveredStyle(styleKey as TaskType)}
-                                                onMouseLeave={() => setHoveredStyle(null)}
-                                            >
-                                                {/* Header */}
-                                                <div className="px-3 py-2 bg-slate-900/50 border-b border-white/5 flex items-center justify-between">
-                                                    <div className="text-xs font-bold uppercase text-slate-300 truncate mr-2" title={def.label}>{def.label}</div>
-                                                </div>
-                                                
-                                                {/* Priority Input */}
-                                                <div className="px-3 py-1.5 bg-black/20 border-b border-white/5 flex items-center justify-between text-[10px]">
-                                                    <span className="text-slate-500 uppercase font-bold">Priority</span>
-                                                    <input 
-                                                        type="number" 
-                                                        min="1" 
-                                                        max="100" 
-                                                        value={priority}
-                                                        onChange={(e) => updateStylePriority(styleKey, e.target.value)}
-                                                        className="w-12 bg-slate-800 border border-white/10 rounded px-1 py-0.5 text-center text-slate-300 focus:outline-none focus:border-purple-500"
-                                                        title="Execution Priority (1-100)"
-                                                    />
-                                                </div>
-
-                                                {/* Controls */}
-                                                <div className="flex flex-col">
-                                                    {/* Clothed & Nude */}
-                                                    <div className="flex border-b border-white/5">
+                                                const isEnabled = options.taskTypes[finalId];
+                                                return (
+                                                    <td key={suffix} className="py-2 px-2">
                                                         <button 
-                                                            onClick={() => toggleTask(styleKey)} 
-                                                            className={`flex-1 flex items-center justify-center gap-1.5 py-2 transition-colors border-r border-white/5 ${isEnabled ? 'bg-purple-600/10 text-purple-400' : 'hover:bg-slate-700 text-slate-400'}`}
-                                                            title="Clothed"
+                                                            onClick={() => toggleTask(finalId)}
+                                                            className={`w-6 h-6 rounded flex items-center justify-center transition-all ${
+                                                                isEnabled 
+                                                                ? suffix === '' ? 'bg-indigo-600 text-white' 
+                                                                  : suffix === '-nude' ? 'bg-purple-600 text-white' 
+                                                                  : suffix === '-anatomy' ? 'bg-pink-600 text-white'
+                                                                  : 'bg-slate-600 text-white'
+                                                                : 'bg-slate-800 border border-slate-600 hover:border-white'
+                                                            }`}
                                                         >
-                                                            {isEnabled ? <CheckSquare size={12} /> : <Square size={12} />}
-                                                            <span className="text-[9px] font-bold uppercase">Clothed</span>
+                                                            {isEnabled && <Check size={14} />}
                                                         </button>
-                                                        
-                                                        {TASK_DEFINITIONS[nudeKey] && (
-                                                            <button 
-                                                                onClick={() => toggleTask(nudeKey)} 
-                                                                className={`flex-1 flex items-center justify-center gap-1.5 py-2 transition-colors ${isNudeEnabled ? 'bg-rose-500/10 text-rose-400' : 'hover:bg-slate-700 text-slate-400'}`}
-                                                                title="Nude"
-                                                            >
-                                                                {isNudeEnabled ? <CheckSquare size={12} /> : <Square size={12} />}
-                                                                <span className="text-[9px] font-bold uppercase">Nude</span>
-                                                            </button>
-                                                        )}
+                                                    </td>
+                                                );
+                                            })}
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                         </div>
+                    </div>
+
+                    {/* Face Views */}
+                    <div className="bg-slate-800/30 p-4 rounded-xl border border-white/5">
+                        <h3 className="text-sm font-bold text-slate-300 uppercase mb-4 flex items-center gap-2"><Sparkles size={16}/> Face Portraits</h3>
+                        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+                            {FACE_VIEWS.map(view => (
+                                <button 
+                                    key={view.id}
+                                    onClick={() => toggleTask(view.id)}
+                                    className={`p-3 rounded-lg border text-center transition-all ${
+                                        options.taskTypes[view.id] 
+                                        ? 'bg-cyan-900/50 border-cyan-500 text-cyan-200 shadow-lg shadow-cyan-500/10' 
+                                        : 'bg-slate-800 border-white/5 text-slate-400 hover:bg-slate-700'
+                                    }`}
+                                >
+                                    <div className="font-bold text-sm mb-1">{view.label}</div>
+                                    <div className={`w-4 h-4 rounded-full mx-auto border ${options.taskTypes[view.id] ? 'bg-cyan-400 border-cyan-400' : 'border-slate-500'}`}></div>
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+
+                </div>
+            )}
+
+            {/* TAB 1: STYLES */}
+            {activeTab === 1 && (
+                <div className="space-y-6">
+                    
+                    {/* Sticky Bulk Selector Header */}
+                    <div className="sticky top-0 z-20 bg-[#1e1c2e]/95 backdrop-blur py-2 -mx-2 px-2 border-b border-white/5 space-y-2">
+                        <div className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Global Overrides</div>
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                            {/* All Clothed */}
+                            <button 
+                                onClick={() => toggleVariant(styleVariantKeys.clothed, getVariantState(styleVariantKeys.clothed))}
+                                className={`flex items-center justify-center gap-2 px-3 py-2 rounded border transition-all text-xs font-bold ${
+                                    getVariantState(styleVariantKeys.clothed) !== 'unchecked' 
+                                    ? 'bg-indigo-600 border-indigo-500 text-white' 
+                                    : 'bg-slate-800 border-white/10 text-slate-400 hover:bg-slate-700'
+                                }`}
+                            >
+                                {getVariantState(styleVariantKeys.clothed) === 'checked' ? <CheckSquare size={14} /> : getVariantState(styleVariantKeys.clothed) === 'partial' ? <Minus size={14} /> : <Square size={14} />}
+                                <span>All Clothed</span>
+                            </button>
+                            {/* All Nude */}
+                            <button 
+                                onClick={() => toggleVariant(styleVariantKeys.nude, getVariantState(styleVariantKeys.nude))}
+                                className={`flex items-center justify-center gap-2 px-3 py-2 rounded border transition-all text-xs font-bold ${
+                                    getVariantState(styleVariantKeys.nude) !== 'unchecked' 
+                                    ? 'bg-purple-600 border-purple-500 text-white' 
+                                    : 'bg-slate-800 border-white/10 text-slate-400 hover:bg-slate-700'
+                                }`}
+                            >
+                                {getVariantState(styleVariantKeys.nude) === 'checked' ? <CheckSquare size={14} /> : getVariantState(styleVariantKeys.nude) === 'partial' ? <Minus size={14} /> : <Square size={14} />}
+                                <span>All Nude</span>
+                            </button>
+                            {/* All Topless */}
+                            <button 
+                                onClick={() => toggleVariant(styleVariantKeys.topless, getVariantState(styleVariantKeys.topless))}
+                                className={`flex items-center justify-center gap-2 px-3 py-2 rounded border transition-all text-xs font-bold ${
+                                    getVariantState(styleVariantKeys.topless) !== 'unchecked' 
+                                    ? 'bg-pink-600 border-pink-500 text-white' 
+                                    : 'bg-slate-800 border-white/10 text-slate-400 hover:bg-slate-700'
+                                }`}
+                            >
+                                {getVariantState(styleVariantKeys.topless) === 'checked' ? <CheckSquare size={14} /> : getVariantState(styleVariantKeys.topless) === 'partial' ? <Minus size={14} /> : <Square size={14} />}
+                                <span>All Topless</span>
+                            </button>
+                            {/* All Bottomless */}
+                            <button 
+                                onClick={() => toggleVariant(styleVariantKeys.bottomless, getVariantState(styleVariantKeys.bottomless))}
+                                className={`flex items-center justify-center gap-2 px-3 py-2 rounded border transition-all text-xs font-bold ${
+                                    getVariantState(styleVariantKeys.bottomless) !== 'unchecked' 
+                                    ? 'bg-rose-600 border-rose-500 text-white' 
+                                    : 'bg-slate-800 border-white/10 text-slate-400 hover:bg-slate-700'
+                                }`}
+                            >
+                                {getVariantState(styleVariantKeys.bottomless) === 'checked' ? <CheckSquare size={14} /> : getVariantState(styleVariantKeys.bottomless) === 'partial' ? <Minus size={14} /> : <Square size={14} />}
+                                <span>All Bottomless</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* Style Groups */}
+                    {STYLE_SUBCATEGORIES.map(category => {
+                        // Find all tasks in this category
+                        const stylesInCat = Object.keys(TASK_DEFINITIONS).filter(k => {
+                            const def = TASK_DEFINITIONS[k as TaskType];
+                            // Base style definition is the clothed one (no suffixes)
+                            return def.category === 'Style' && def.subCategory === category && !k.includes('-nude') && !k.includes('-topless') && !k.includes('-bottomless');
+                        });
+                        
+                        if (stylesInCat.length === 0) return null;
+
+                        const isExpanded = expandedCategories[category];
+
+                        return (
+                            <div key={category} className="bg-slate-800/30 rounded-xl border border-white/5 overflow-hidden">
+                                <div 
+                                    className="px-4 py-3 bg-slate-800/50 flex items-center justify-between cursor-pointer hover:bg-slate-800 transition-colors"
+                                    onClick={() => toggleCategory(category)}
+                                >
+                                    <h3 className="font-bold text-white uppercase tracking-wider text-xs">{category}</h3>
+                                    <div className="flex items-center gap-2">
+                                        <span className="text-[10px] bg-black/30 px-2 py-0.5 rounded text-slate-400">{stylesInCat.length} Styles</span>
+                                        {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                                    </div>
+                                </div>
+                                
+                                {isExpanded && (
+                                    <div className="p-2 space-y-1">
+                                        
+                                        {/* SUBGROUP CONTROLS */}
+                                        <div className="flex items-center gap-2 mb-2 px-2 py-1.5 bg-white/5 rounded border border-white/5">
+                                             <span className="text-[10px] uppercase font-bold text-slate-500 mr-auto">Select {category}:</span>
+                                             
+                                             {/* Clothed */}
+                                             <button
+                                                 onClick={(e) => {
+                                                     e.stopPropagation();
+                                                     const keys = getSubgroupKeys(category, 'clothed');
+                                                     toggleVariant(keys, getVariantState(keys));
+                                                 }}
+                                                 className={`w-10 h-6 flex items-center justify-center rounded border transition-colors ${
+                                                     getVariantState(getSubgroupKeys(category, 'clothed')) !== 'unchecked'
+                                                     ? 'bg-indigo-600 border-indigo-500 text-white'
+                                                     : 'bg-slate-800 border-slate-600 text-slate-400'
+                                                 }`}
+                                                 title="Toggle All Clothed in Category"
+                                             >
+                                                 {getVariantState(getSubgroupKeys(category, 'clothed')) === 'checked' ? <CheckSquare size={14} /> : 
+                                                  getVariantState(getSubgroupKeys(category, 'clothed')) === 'partial' ? <Minus size={14} /> : <Square size={14} />}
+                                             </button>
+
+                                             {/* Nude */}
+                                             <button
+                                                 onClick={(e) => {
+                                                     e.stopPropagation();
+                                                     const keys = getSubgroupKeys(category, 'nude');
+                                                     toggleVariant(keys, getVariantState(keys));
+                                                 }}
+                                                 className={`w-10 h-6 flex items-center justify-center rounded border transition-colors ${
+                                                     getVariantState(getSubgroupKeys(category, 'nude')) !== 'unchecked'
+                                                     ? 'bg-purple-600 border-purple-500 text-white'
+                                                     : 'bg-slate-800 border-slate-600 text-slate-400'
+                                                 }`}
+                                                 title="Toggle All Nude in Category"
+                                             >
+                                                 {getVariantState(getSubgroupKeys(category, 'nude')) === 'checked' ? <CheckSquare size={14} /> : 
+                                                  getVariantState(getSubgroupKeys(category, 'nude')) === 'partial' ? <Minus size={14} /> : <Square size={14} />}
+                                             </button>
+
+                                             {/* Topless */}
+                                             <button
+                                                 onClick={(e) => {
+                                                     e.stopPropagation();
+                                                     const keys = getSubgroupKeys(category, 'topless');
+                                                     toggleVariant(keys, getVariantState(keys));
+                                                 }}
+                                                 className={`w-10 h-6 flex items-center justify-center rounded border transition-colors ${
+                                                     getVariantState(getSubgroupKeys(category, 'topless')) !== 'unchecked'
+                                                     ? 'bg-pink-600 border-pink-500 text-white'
+                                                     : 'bg-slate-800 border-slate-600 text-slate-400'
+                                                 }`}
+                                                 title="Toggle All Topless in Category"
+                                             >
+                                                 {getVariantState(getSubgroupKeys(category, 'topless')) === 'checked' ? <CheckSquare size={14} /> : 
+                                                  getVariantState(getSubgroupKeys(category, 'topless')) === 'partial' ? <Minus size={14} /> : <Square size={14} />}
+                                             </button>
+
+                                             {/* Bottomless */}
+                                             <button
+                                                 onClick={(e) => {
+                                                     e.stopPropagation();
+                                                     const keys = getSubgroupKeys(category, 'bottomless');
+                                                     toggleVariant(keys, getVariantState(keys));
+                                                 }}
+                                                 className={`w-10 h-6 flex items-center justify-center rounded border transition-colors ${
+                                                     getVariantState(getSubgroupKeys(category, 'bottomless')) !== 'unchecked'
+                                                     ? 'bg-rose-600 border-rose-500 text-white'
+                                                     : 'bg-slate-800 border-slate-600 text-slate-400'
+                                                 }`}
+                                                 title="Toggle All Bottomless in Category"
+                                             >
+                                                 {getVariantState(getSubgroupKeys(category, 'bottomless')) === 'checked' ? <CheckSquare size={14} /> : 
+                                                  getVariantState(getSubgroupKeys(category, 'bottomless')) === 'partial' ? <Minus size={14} /> : <Square size={14} />}
+                                             </button>
+                                        </div>
+
+                                        {/* Header Row */}
+                                        <div className="flex items-center px-2 py-1 text-[10px] font-mono uppercase text-slate-500">
+                                            <div className="flex-1">Style Name</div>
+                                            <div className="w-12 text-center">Prio</div>
+                                            <div className="w-10 text-center">Cloth</div>
+                                            <div className="w-10 text-center text-purple-400">Nude</div>
+                                            <div className="w-10 text-center text-pink-400">Top</div>
+                                            <div className="w-10 text-center text-rose-400">Bot</div>
+                                        </div>
+
+                                        {stylesInCat.map(styleId => {
+                                            const def = TASK_DEFINITIONS[styleId as TaskType];
+                                            const variants = {
+                                                clothed: styleId,
+                                                nude: `${styleId}-nude`,
+                                                topless: `${styleId}-topless`,
+                                                bottomless: `${styleId}-bottomless`
+                                            };
+                                            
+                                            // Tooltip logic
+                                            const isHovered = hoveredStyle === styleId;
+
+                                            return (
+                                                <div 
+                                                    key={styleId} 
+                                                    className="flex items-center p-2 hover:bg-white/5 rounded relative group"
+                                                    onMouseEnter={(e) => { setHoveredStyle(styleId as TaskType); setMousePos({x: e.clientX, y: e.clientY}); }}
+                                                    onMouseLeave={() => setHoveredStyle(null)}
+                                                >
+                                                    <div className="flex-1 min-w-0 pr-2">
+                                                        <div className="text-sm font-bold text-slate-300 truncate">{def.label}</div>
+                                                        <div className="text-[10px] text-slate-500 truncate">{def.description}</div>
                                                     </div>
 
-                                                    {/* Partial (Topless/Bottomless) */}
-                                                    {TASK_DEFINITIONS[toplessKey] && TASK_DEFINITIONS[bottomlessKey] && (
-                                                        <div className="flex">
-                                                            <button 
-                                                                onClick={() => toggleTask(toplessKey)} 
-                                                                className={`flex-1 flex items-center justify-center gap-1.5 py-2 transition-colors border-r border-white/5 ${isToplessEnabled ? 'bg-amber-500/10 text-amber-400' : 'hover:bg-slate-700 text-slate-400'}`}
-                                                                title="Topless"
-                                                            >
-                                                                {isToplessEnabled ? <CheckSquare size={12} /> : <Square size={12} />}
-                                                                <span className="text-[9px] font-bold uppercase">Topless</span>
-                                                            </button>
-                                                            
-                                                            <button 
-                                                                onClick={() => toggleTask(bottomlessKey)} 
-                                                                className={`flex-1 flex items-center justify-center gap-1.5 py-2 transition-colors ${isBottomlessEnabled ? 'bg-amber-500/10 text-amber-400' : 'hover:bg-slate-700 text-slate-400'}`}
-                                                                title="Bottomless"
-                                                            >
-                                                                {isBottomlessEnabled ? <CheckSquare size={12} /> : <Square size={12} />}
-                                                                <span className="text-[9px] font-bold uppercase">Botless</span>
-                                                            </button>
+                                                    {/* Priority Input */}
+                                                    <div className="w-12 shrink-0 mr-2">
+                                                        <input 
+                                                            type="number" 
+                                                            className="w-full bg-black/40 border border-white/10 rounded px-1 py-0.5 text-center text-xs text-indigo-300 focus:outline-none focus:border-indigo-500"
+                                                            value={options.stylePriorities[styleId] || ''}
+                                                            placeholder="50"
+                                                            onChange={(e) => updateStylePriority(styleId, e.target.value)}
+                                                        />
+                                                    </div>
+
+                                                    {/* Variant Toggles */}
+                                                    <div className="flex items-center gap-1">
+                                                        {Object.values(variants).map((vid, idx) => (
+                                                            <div key={vid} className="w-10 flex justify-center">
+                                                                <button
+                                                                    onClick={() => toggleTask(vid)}
+                                                                    className={`w-5 h-5 rounded flex items-center justify-center transition-colors border ${
+                                                                        options.taskTypes[vid]
+                                                                        ? idx === 0 ? 'bg-indigo-600 border-indigo-500 text-white' // Clothed
+                                                                          : idx === 1 ? 'bg-purple-600 border-purple-500 text-white' // Nude
+                                                                          : idx === 2 ? 'bg-pink-600 border-pink-500 text-white' // Topless
+                                                                          : 'bg-rose-600 border-rose-500 text-white' // Bottomless
+                                                                        : 'bg-slate-800 border-slate-600 hover:border-white/50'
+                                                                    }`}
+                                                                >
+                                                                    {options.taskTypes[vid] && <Check size={12} strokeWidth={4} />}
+                                                                </button>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+
+                                                    {/* Tooltip Popup */}
+                                                    {isHovered && (
+                                                        <div 
+                                                            className="fixed z-50 pointer-events-none bg-black/90 backdrop-blur border border-white/10 p-2 rounded text-xs text-white shadow-xl max-w-xs"
+                                                            style={{ top: mousePos.y + 10, left: mousePos.x + 10 }}
+                                                        >
+                                                            <div className="font-bold text-indigo-400 mb-1">{def.label}</div>
+                                                            <div className="text-slate-300">{def.description}</div>
                                                         </div>
                                                     )}
                                                 </div>
-                                            </div>
-                                        );
-                                    })}
-                                </div>
-                             )}
-                         </div>
-                     );
-                 })}
-                 </div>
-
-                 {/* TOOLTIP OVERLAY */}
-                 {hoveredStyle && TASK_DEFINITIONS[hoveredStyle] && (
-                     <div 
-                         className="fixed z-50 bg-slate-900/95 border border-purple-500/50 p-6 rounded-xl shadow-2xl backdrop-blur-md pointer-events-none min-w-[320px] max-w-[400px]"
-                         style={{
-                             top: mousePos.y, 
-                             left: mousePos.x > window.innerWidth / 2 ? mousePos.x - 50 : mousePos.x + 50,
-                             transform: mousePos.x > window.innerWidth / 2 ? 'translate(-100%, -50%)' : 'translate(0, -50%)'
-                         }}
-                     >
-                         <div className="flex items-center gap-3 mb-3">
-                             <Scissors className="text-purple-400 w-8 h-8" />
-                             <h4 className="font-bold text-white text-2xl uppercase tracking-wide">{TASK_DEFINITIONS[hoveredStyle].label}</h4>
-                         </div>
-                         <p className="text-base text-slate-300 leading-relaxed mb-4 font-medium">{TASK_DEFINITIONS[hoveredStyle].description}</p>
-                         <div className="text-sm text-slate-400 font-mono bg-black/40 p-3 rounded border border-white/10 leading-relaxed">
-                            {/* Extract key definition keywords for context */}
-                            {TASK_DEFINITIONS[hoveredStyle].prompt({gender: 'Female', detailLevel: 'Medium', personDescription: '', customStyle: '', modesty: '', bodyHair: {}})
-                                .split('STYLE GUIDE:')[1]?.split('\n')[0]?.trim() || "No detailed style guide available."}
-                         </div>
-                     </div>
-                 )}
-              </div>
-          )}
-
-          {/* ADVANCED TAB */}
-          {activeTab === 2 && (
-            <div className="p-8 space-y-8 max-w-4xl mx-auto w-full">
-              
-              {/* Output Format Section */}
-              <div className="bg-slate-800/20 p-6 rounded-xl border border-white/5">
-                  <div className="flex items-center space-x-2 mb-4"><FileImage size={20} className="text-emerald-400" /><h3 className="text-base font-bold text-slate-200">Output Format</h3></div>
-                  <div className="flex bg-slate-900 rounded-lg p-1 border border-white/5">
-                      <button onClick={() => setOptions(prev => ({...prev, outputFormat: 'png'}))} className={`flex-1 py-3 rounded text-sm font-bold transition-colors ${options.outputFormat === 'png' ? 'bg-emerald-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'}`}>PNG (Transparent)</button>
-                      <button onClick={() => setOptions(prev => ({...prev, outputFormat: 'jpg'}))} className={`flex-1 py-3 rounded text-sm font-bold transition-colors ${options.outputFormat === 'jpg' ? 'bg-emerald-800 text-white shadow' : 'text-slate-400 hover:text-slate-200'}`}>JPG (with EXIF)</button>
-                  </div>
-                  <p className="text-xs text-slate-500 mt-3 leading-relaxed">
-                      PNG supports transparency but has no metadata. <br/>
-                      JPG replaces transparency with white but includes rich EXIF metadata (Copyright, GPS, Description).
-                  </p>
-              </div>
-
-              {/* Model & Creativity */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <div className="bg-slate-800/20 p-6 rounded-xl border border-white/5">
-                      <div className="flex items-center space-x-2 mb-4"><Cpu size={20} className="text-purple-400" /><h3 className="text-base font-bold text-slate-200">AI Model</h3></div>
-                      <div className="flex bg-slate-900 rounded-lg p-1 border border-white/5">
-                          <button onClick={() => setOptions(prev => ({...prev, modelPreference: 'flash'}))} className={`flex-1 py-3 rounded text-sm font-bold transition-colors ${options.modelPreference === 'flash' ? 'bg-purple-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'}`}>Flash (Fast)</button>
-                          <button onClick={() => setOptions(prev => ({...prev, modelPreference: 'pro'}))} className={`flex-1 py-3 rounded text-sm font-bold transition-colors ${options.modelPreference === 'pro' ? 'bg-purple-800 text-white shadow' : 'text-slate-400 hover:text-slate-200'}`}>Pro (High Qual)</button>
-                      </div>
-                      <p className="text-xs text-slate-500 mt-3 leading-relaxed">Flash is faster and cheaper. Pro (Gemini 3) follows complex instructions better and supports native 4K.</p>
-                  </div>
-
-                  <div className="bg-slate-800/20 p-6 rounded-xl border border-white/5">
-                      <div className="flex items-center space-x-2 mb-4"><Sparkles size={20} className="text-amber-400" /><h3 className="text-base font-bold text-slate-200">Creativity (Temperature)</h3></div>
-                      <input type="range" min="0" max="1" step="0.1" value={options.creativity ?? 0.4} onChange={(e) => setOptions(prev => ({...prev, creativity: parseFloat(e.target.value)}))} className="w-full h-2 bg-slate-700 rounded-lg accent-amber-500 cursor-pointer" />
-                      <div className="flex justify-between text-xs font-mono text-slate-400 mt-3"><span>Strict (0.0)</span><span className="text-amber-400 font-bold bg-amber-500/10 px-2 rounded">{options.creativity ?? 0.4}</span><span>Wild (1.0)</span></div>
-                  </div>
-              </div>
-
-              {/* Detail Level */}
-              <div className="bg-slate-800/20 p-8 rounded-xl border border-white/5">
-                  <h3 className="text-sm font-bold text-purple-400 uppercase tracking-widest mb-6">Detail Level</h3>
-                  <div className="relative pt-2">
-                       <input type="range" min="0" max="4" step="1" value={['Very Low', 'Low', 'Medium', 'High', 'Very High'].indexOf(options.detailLevel)} onChange={(e) => setOptions(prev => ({...prev, detailLevel: ['Very Low', 'Low', 'Medium', 'High', 'Very High'][parseInt(e.target.value)]}))} className="w-full h-2 bg-slate-700 rounded-lg accent-purple-500 cursor-pointer relative z-10" />
-                       <div className="flex justify-between mt-4">
-                           {['Very Low', 'Low', 'Medium', 'High', 'Very High'].map((l, i) => (
-                               <div key={l} className="flex flex-col items-center cursor-pointer" onClick={() => setOptions(prev => ({...prev, detailLevel: l}))}>
-                                   <div className={`w-1 h-2 mb-2 ${options.detailLevel === l ? 'bg-purple-500' : 'bg-slate-700'}`}></div>
-                                   <span className={`text-xs font-bold uppercase tracking-wider ${options.detailLevel === l ? 'text-purple-400' : 'text-slate-600'}`}>{l}</span>
-                               </div>
-                           ))}
-                       </div>
-                  </div>
-              </div>
-            </div>
-          )}
-
-          {/* MODIFIERS TAB */}
-          {activeTab === 3 && (
-              <div className="p-8 space-y-8 max-w-4xl mx-auto w-full">
-                  
-                  {/* MODESTY LAYER */}
-                  <div className="bg-slate-800/20 p-6 rounded-xl border border-white/5">
-                       <div className="flex items-center space-x-2 mb-4"><Shield size={20} className="text-rose-400" /><h3 className="text-base font-bold text-slate-200">Modesty Layer</h3></div>
-                       <p className="text-xs text-slate-500 mb-4">Automatically applies covering elements to nude generations. Does not affect clothed tasks.</p>
-                       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 max-h-64 overflow-y-auto custom-scrollbar p-1">
-                           {MODESTY_OPTIONS.map(m => (
-                               <button 
-                                 key={m} 
-                                 onClick={() => setOptions(prev => ({...prev, modesty: m}))}
-                                 className={`px-3 py-2 rounded-lg text-xs font-bold uppercase tracking-wide border transition-all ${options.modesty === m ? 'bg-rose-500/20 border-rose-500 text-rose-300' : 'bg-slate-900/50 border-white/5 text-slate-400 hover:bg-slate-800'}`}
-                               >
-                                   {m}
-                               </button>
-                           ))}
-                       </div>
-                  </div>
-
-                  {/* Gender */}
-                  <div className="bg-slate-800/20 p-6 rounded-xl border border-white/5">
-                      <h3 className="text-sm font-bold text-purple-400 uppercase tracking-widest mb-4">Target Gender Bias</h3>
-                      <div className="flex flex-wrap gap-3">
-                          {['As-is', 'Female', 'Male', 'Non-binary', 'Transgender'].map(g => (
-                              <button key={g} onClick={() => setOptions(prev => ({...prev, gender: g}))} className={`px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wide border transition-all ${options.gender === g ? 'bg-purple-600 border-purple-500 text-white shadow-lg shadow-purple-500/20' : 'bg-slate-900 border-white/10 text-slate-400 hover:bg-slate-800'}`}>{g}</button>
-                          ))}
-                      </div>
-                      <p className="text-xs text-slate-500 mt-3"><Info size={12} className="inline mr-1"/> Forces the AI to interpret ambiguous subjects as the selected gender.</p>
-                  </div>
-              </div>
-          )}
-
-          {/* HAIR TAB */}
-          {activeTab === 4 && (
-              <div className="p-8 max-w-7xl mx-auto w-full">
-                  <div className="flex justify-between items-center mb-6">
-                      <div>
-                        <h3 className="text-xl font-bold text-purple-400 uppercase tracking-wide">Body Hair Configuration</h3>
-                        <p className="text-sm text-slate-500 mt-1">Granular control over hair density for specific body zones. Default uses AI discretion.</p>
-                      </div>
-                      <div className="flex gap-2">
-                        <button onClick={setSmoothBodyHair} className="text-xs uppercase font-bold text-emerald-400 hover:text-white bg-slate-800 hover:bg-emerald-600 px-3 py-1.5 rounded flex items-center gap-2 border border-emerald-500/30 transition-colors"><Eraser size={14}/> Preset: Smooth Body</button>
-                        <button onClick={resetBodyHair} className="text-xs uppercase font-bold text-slate-400 hover:text-white bg-slate-800 px-3 py-1.5 rounded flex items-center gap-2 border border-white/5 hover:border-white/10"><X size={14}/> Reset All</button>
-                      </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                      {HAIR_GROUPS.map(group => (
-                          <div key={group} className="space-y-4">
-                              <div className="pb-2 border-b border-white/10 text-sm font-bold text-slate-300 uppercase tracking-wider">{group}</div>
-                              {BODY_HAIR_ZONES.filter(z => z.group === group).map(zone => {
-                                  const currentValue = options.bodyHair?.[zone.id] || 'Default';
-                                  
-                                  // Dynamic Color logic for selector
-                                  const getDensityColor = (val: string) => {
-                                      if (val === 'None') return 'text-sky-300 bg-sky-900/20 border-sky-500/30';
-                                      if (['Stubble', 'Light'].includes(val)) return 'text-emerald-300 bg-emerald-900/20 border-emerald-500/30';
-                                      if (['Medium', 'Heavy'].includes(val)) return 'text-amber-300 bg-amber-900/20 border-amber-500/30';
-                                      if (['Bushy', 'Long'].includes(val)) return 'text-rose-300 bg-rose-900/20 border-rose-500/30';
-                                      if (val === 'Default') return 'text-slate-400 bg-slate-800/50 border-white/5';
-                                      return 'text-slate-200 bg-slate-800 border-white/10';
-                                  };
-
-                                  return (
-                                      <div key={zone.id} className="flex flex-col gap-1.5 p-3 rounded-lg bg-slate-800/30 border border-white/5 hover:bg-slate-800/50 transition-colors">
-                                          <div className="text-xs font-bold text-slate-300 uppercase">{zone.label}</div>
-                                          <div className="relative">
-                                              <select 
-                                                  value={currentValue}
-                                                  onChange={(e) => updateBodyHair(zone.id, e.target.value)}
-                                                  className={`w-full appearance-none rounded px-3 py-2 text-xs font-bold uppercase border cursor-pointer outline-none focus:ring-1 focus:ring-purple-500 transition-all ${getDensityColor(currentValue)}`}
-                                              >
-                                                  {HAIR_DENSITIES.map(d => (
-                                                      <option key={d} value={d} className="bg-[#1e1c2e] text-slate-300">{d}</option>
-                                                  ))}
-                                              </select>
-                                              {/* Custom Arrow */}
-                                              <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none opacity-50">
-                                                  <svg width="10" height="6" viewBox="0 0 10 6" fill="currentColor" className="text-current"><path d="M0 0L5 6L10 0H0Z"/></svg>
-                                              </div>
-                                          </div>
-                                      </div>
-                                  );
-                              })}
-                          </div>
-                      ))}
-                  </div>
-              </div>
-          )}
-
-          {/* CUSTOM TAB (NEW) */}
-          {activeTab === 5 && (
-               <div className="p-8 space-y-8 max-w-5xl mx-auto w-full">
-                  
-                  {/* Custom Style Input */}
-                  <div className="bg-slate-800/20 p-6 rounded-xl border border-white/5">
-                      <h3 className="text-sm font-bold text-purple-400 uppercase tracking-widest mb-4">Custom Style & Prompt Injection</h3>
-                      <textarea value={options.customStyle || ''} onChange={(e) => setOptions(prev => ({...prev, customStyle: e.target.value}))} placeholder="E.g., 'Art Nouveau', 'Cyberpunk', 'Thick Lines'..." className="w-full h-32 bg-black/30 border border-white/10 rounded-lg p-4 text-sm text-slate-200 resize-none font-mono focus:border-purple-500 focus:ring-1 focus:ring-purple-500 focus:outline-none placeholder:text-slate-600" />
-                      <p className="text-xs text-slate-500 mt-2">These instructions are appended to the system prompt. Use this to enforce specific artistic directions not covered by presets.</p>
-                  </div>
-
-                  {/* Defaults Grid */}
-                  <div>
-                      <h3 className="text-sm font-bold text-slate-400 uppercase tracking-widest mb-4">Quick Presets</h3>
-                      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-                           {CUSTOM_DEFAULTS.map((def, idx) => (
-                               <div key={idx} className="group relative">
-                                    <button 
-                                        onClick={() => setOptions(prev => ({...prev, customStyle: def.value}))}
-                                        className="w-full px-3 py-2 bg-slate-800/50 hover:bg-slate-700 border border-white/5 rounded-lg text-left transition-colors flex flex-col gap-1"
-                                    >
-                                        <span className="text-xs font-bold text-slate-300 group-hover:text-white">{def.label}</span>
-                                    </button>
-                                    {/* Tooltip */}
-                                    <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-48 p-2 bg-black/90 text-xs text-slate-300 rounded border border-white/10 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-20 text-center">
-                                        {def.tooltip}
+                                            );
+                                        })}
                                     </div>
-                               </div>
-                           ))}
-                      </div>
-                  </div>
-               </div>
-          )}
-
-        </div>
-
-        {/* Footer */}
-        <div className="p-4 bg-[#1a1825] border-t border-white/5 flex justify-between shrink-0 backdrop-blur z-40">
-            {isSaveMode ? (
-                <div className="flex items-center space-x-2 w-full animate-in fade-in slide-in-from-bottom-2 bg-slate-800 p-1 rounded-lg border border-purple-500/50">
-                    <span className="text-xs font-bold text-purple-400 px-2 uppercase">File Name:</span>
-                    <input 
-                        type="text" 
-                        value={presetName}
-                        onChange={(e) => setPresetName(e.target.value)}
-                        onKeyDown={(e) => e.key === 'Enter' && performSave()}
-                        className="bg-black/20 border border-white/10 rounded px-3 py-1.5 text-sm text-white flex-1 focus:ring-1 focus:ring-purple-500 outline-none"
-                        placeholder="Enter preset name..."
-                        autoFocus
-                    />
-                    <button onClick={performSave} className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded font-bold text-xs shadow-lg shadow-emerald-500/20 transition-all">Download .klc</button>
-                    <button onClick={() => setIsSaveMode(false)} className="px-4 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded font-bold text-xs transition-colors">Cancel</button>
+                                )}
+                            </div>
+                        );
+                    })}
                 </div>
-            ) : (
-                <>
-                    <div className="flex space-x-3">
-                        <button onClick={() => setIsSaveMode(true)} className="flex items-center space-x-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-slate-300 hover:text-white transition-colors border border-white/5" title="Save Config"><Download size={16} /> <span>Save Preset</span></button>
-                        <button onClick={() => fileInputRef.current?.click()} className="flex items-center space-x-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-slate-300 hover:text-white transition-colors border border-white/5" title="Load Config"><Upload size={16} /> <span>Load Preset</span></button>
-                        <input type="file" ref={fileInputRef} hidden accept=".klc,.json" onChange={performLoad} />
-                    </div>
-                    <button onClick={onClose} className="px-8 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-lg font-bold text-sm shadow-lg shadow-purple-500/20 transition-all hover:scale-105">Done</button>
-                </>
             )}
+
+            {/* TAB 2: ADVANCED */}
+            {activeTab === 2 && (
+                <div className="space-y-6">
+                    {/* Gender Section */}
+                    <div className="bg-slate-800/30 p-4 rounded-xl border border-white/5">
+                        <label className="text-sm font-bold text-slate-300 uppercase mb-3 block">Gender Bias</label>
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                            {['As-is', 'Female', 'Male', 'Non-Binary'].map(g => (
+                                <button
+                                    key={g}
+                                    onClick={() => setOptions(prev => ({ ...prev, gender: g }))}
+                                    className={`py-3 rounded-lg border text-sm font-bold transition-all ${
+                                        options.gender === g 
+                                        ? 'bg-indigo-600 border-indigo-500 text-white shadow' 
+                                        : 'bg-slate-800 border-white/5 text-slate-400 hover:bg-slate-700'
+                                    }`}
+                                >
+                                    {g}
+                                </button>
+                            ))}
+                        </div>
+                        <p className="mt-2 text-[10px] text-slate-500">Forces the AI to interpret subjects as specific gender. "As-is" respects original image.</p>
+                    </div>
+
+                    {/* Output Format Section */}
+                    <div className="bg-slate-800/30 p-4 rounded-xl border border-white/5">
+                        <label className="text-sm font-bold text-slate-300 uppercase mb-3 block">Output Format</label>
+                        <div className="grid grid-cols-2 gap-3">
+                             <button
+                                onClick={() => setOptions(prev => ({ ...prev, outputFormat: 'png' }))}
+                                className={`flex flex-col items-center p-3 rounded-lg border transition-all ${
+                                    options.outputFormat === 'png' 
+                                    ? 'bg-blue-900/40 border-blue-500 text-blue-200' 
+                                    : 'bg-slate-800 border-white/5 text-slate-400 hover:bg-slate-700'
+                                }`}
+                             >
+                                 <span className="font-bold text-lg">PNG</span>
+                                 <span className="text-[10px] opacity-70">Transparency Supported</span>
+                             </button>
+                             <button
+                                onClick={() => setOptions(prev => ({ ...prev, outputFormat: 'jpg' }))}
+                                className={`flex flex-col items-center p-3 rounded-lg border transition-all ${
+                                    options.outputFormat === 'jpg' 
+                                    ? 'bg-blue-900/40 border-blue-500 text-blue-200' 
+                                    : 'bg-slate-800 border-white/5 text-slate-400 hover:bg-slate-700'
+                                }`}
+                             >
+                                 <span className="font-bold text-lg">JPG</span>
+                                 <span className="text-[10px] opacity-70">EXIF Data Included</span>
+                             </button>
+                        </div>
+                    </div>
+
+                    {/* Model Config */}
+                    <div className="bg-slate-800/30 p-4 rounded-xl border border-white/5">
+                        <div className="mb-4">
+                            <label className="text-sm font-bold text-slate-300 uppercase mb-2 block">AI Model</label>
+                            <div className="flex bg-black/40 p-1 rounded-lg border border-white/5">
+                                <button 
+                                    onClick={() => setOptions(prev => ({ ...prev, modelPreference: 'flash' }))}
+                                    className={`flex-1 py-2 rounded text-xs font-bold transition-all ${options.modelPreference === 'flash' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                                >
+                                    Gemini 2.5 Flash (Fast)
+                                </button>
+                                <button 
+                                    onClick={() => setOptions(prev => ({ ...prev, modelPreference: 'pro' }))}
+                                    className={`flex-1 py-2 rounded text-xs font-bold transition-all ${options.modelPreference === 'pro' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                                >
+                                    Gemini 3 Pro (High Quality)
+                                </button>
+                            </div>
+                            {options.modelPreference === 'pro' && <p className="mt-2 text-[10px] text-amber-400 flex items-center gap-1"><Info size={12} /> Pro model incurs higher API costs.</p>}
+                        </div>
+
+                        <div className="mb-4">
+                             <label className="text-sm font-bold text-slate-300 uppercase mb-2 block">Detail Level</label>
+                             <input 
+                                type="range" 
+                                min="0" max="4" step="1" 
+                                value={['Very Low', 'Low', 'Medium', 'High', 'Very High'].indexOf(options.detailLevel)}
+                                onChange={(e) => setOptions(prev => ({ ...prev, detailLevel: ['Very Low', 'Low', 'Medium', 'High', 'Very High'][parseInt(e.target.value)] }))}
+                                className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+                             />
+                             <div className="flex justify-between text-[10px] text-slate-500 mt-1 font-mono uppercase">
+                                 <span>Very Low</span>
+                                 <span>Low</span>
+                                 <span className="text-white font-bold">Medium</span>
+                                 <span>High</span>
+                                 <span>Ultra</span>
+                             </div>
+                        </div>
+
+                        <div>
+                             <label className="text-sm font-bold text-slate-300 uppercase mb-2 block">Creativity (Temperature): {options.creativity}</label>
+                             <input 
+                                type="range" 
+                                min="0" max="1" step="0.1" 
+                                value={options.creativity}
+                                onChange={(e) => setOptions(prev => ({ ...prev, creativity: parseFloat(e.target.value) }))}
+                                className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+                             />
+                             <div className="flex justify-between text-[10px] text-slate-500 mt-1 font-mono uppercase">
+                                 <span>Strict (0.0)</span>
+                                 <span>Balanced (0.4)</span>
+                                 <span>Wild (1.0)</span>
+                             </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+            
+            {/* TAB 3: MODIFIERS */}
+            {activeTab === 3 && (
+                <div className="space-y-6">
+                    <div className="bg-slate-800/30 p-4 rounded-xl border border-white/5">
+                        <h3 className="text-sm font-bold text-slate-300 uppercase mb-2 flex items-center gap-2"><Shield size={16}/> Modesty Layer</h3>
+                        <p className="text-xs text-slate-400 mb-4">
+                            Automatically adds covering elements to "Nude" tasks to ensure generated content remains safe or artistic while preserving anatomy.
+                        </p>
+                        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 max-h-[60vh] overflow-y-auto pr-2 custom-scrollbar">
+                            {MODESTY_OPTIONS.map(opt => (
+                                <button
+                                    key={opt}
+                                    onClick={() => setOptions(prev => ({ ...prev, modesty: opt }))}
+                                    className={`px-3 py-2 rounded text-xs text-left transition-all border ${
+                                        options.modesty === opt 
+                                        ? 'bg-emerald-900/40 border-emerald-500 text-emerald-200 font-bold' 
+                                        : 'bg-slate-800 border-white/5 text-slate-400 hover:bg-slate-700 hover:text-white'
+                                    }`}
+                                >
+                                    {opt}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* TAB 4: BODY HAIR */}
+            {activeTab === 4 && (
+                <div className="space-y-6">
+                    <div className="flex items-center justify-between">
+                         <h3 className="text-sm font-bold text-slate-300 uppercase">Zone Density Control</h3>
+                         <div className="flex gap-2">
+                             <button onClick={setSmoothBodyHair} className="px-3 py-1 bg-slate-800 hover:bg-indigo-600 text-white text-xs rounded border border-white/10 transition-colors">Smooth Body Preset</button>
+                             <button onClick={resetBodyHair} className="px-3 py-1 bg-slate-800 hover:bg-red-500 text-white text-xs rounded border border-white/10 transition-colors">Reset Default</button>
+                         </div>
+                    </div>
+
+                    {HAIR_GROUPS.map(group => (
+                        <div key={group} className="bg-slate-800/30 p-4 rounded-xl border border-white/5">
+                            <h4 className="text-xs font-bold text-slate-500 uppercase mb-3 border-b border-white/5 pb-1">{group} Zones</h4>
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                                {BODY_HAIR_ZONES.filter(z => z.group === group).map(zone => {
+                                    const currentVal = options.bodyHair[zone.id] || 'Default';
+                                    return (
+                                        <div key={zone.id} className="flex items-center justify-between">
+                                            <label className="text-xs text-slate-300 font-medium">{zone.label}</label>
+                                            <select 
+                                                value={currentVal}
+                                                onChange={(e) => updateBodyHair(zone.id, e.target.value)}
+                                                className={`bg-black/40 border text-xs rounded px-2 py-1 outline-none focus:border-indigo-500 ${currentVal !== 'Default' ? 'border-indigo-500 text-indigo-300' : 'border-white/10 text-slate-500'}`}
+                                            >
+                                                {HAIR_DENSITIES.map(d => (
+                                                    <option key={d} value={d}>{d}</option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            )}
+
+            {/* TAB 5: CUSTOM */}
+            {activeTab === 5 && (
+                 <div className="space-y-6">
+                    <div className="bg-slate-800/30 p-4 rounded-xl border border-white/5 h-full flex flex-col">
+                         <h3 className="text-sm font-bold text-slate-300 uppercase mb-2">Additional Prompt Instructions</h3>
+                         <textarea 
+                             className="flex-1 min-h-[150px] bg-black/40 border border-white/10 rounded-lg p-3 text-sm text-white focus:border-indigo-500 outline-none resize-none font-mono"
+                             placeholder="Enter specific instructions here (e.g. 'Make everyone wear glasses', 'Cyberpunk city background', 'Sketchy lines')..."
+                             value={options.customStyle}
+                             onChange={(e) => setOptions(prev => ({ ...prev, customStyle: e.target.value }))}
+                         />
+                         
+                         <div className="mt-4">
+                             <label className="text-xs font-bold text-slate-500 uppercase mb-2 block">Quick Presets</label>
+                             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+                                 {CUSTOM_DEFAULTS.map(preset => (
+                                     <button
+                                         key={preset.label}
+                                         onClick={() => setOptions(prev => ({ ...prev, customStyle: preset.value }))}
+                                         className="px-3 py-2 bg-slate-800 hover:bg-slate-700 border border-white/5 rounded text-xs text-left truncate transition-colors text-slate-300 hover:text-white"
+                                         title={preset.tooltip}
+                                     >
+                                         {preset.label}
+                                     </button>
+                                 ))}
+                             </div>
+                         </div>
+                    </div>
+                 </div>
+            )}
+
         </div>
+
+        {/* Footer Actions */}
+        <div className="p-4 bg-[#1a1825] border-t border-white/5 shrink-0 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+                 {isSaveMode ? (
+                     <div className="flex items-center gap-2 animate-in slide-in-from-left-4">
+                         <input 
+                            type="text" 
+                            className="bg-black/40 border border-white/10 rounded px-3 py-2 text-xs text-white outline-none focus:border-indigo-500 w-48"
+                            placeholder="Preset Name"
+                            value={presetName}
+                            onChange={(e) => setPresetName(e.target.value)}
+                            autoFocus
+                         />
+                         <button onClick={performSave} className="p-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded transition-colors"><Check size={16}/></button>
+                         <button onClick={() => setIsSaveMode(false)} className="p-2 bg-slate-700 hover:bg-slate-600 text-white rounded transition-colors"><X size={16}/></button>
+                     </div>
+                 ) : (
+                     <>
+                        <button onClick={() => setIsSaveMode(true)} className="flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-xs font-bold transition-colors border border-white/5">
+                            <Save size={16} /> Save Preset
+                        </button>
+                        <button onClick={() => fileInputRef.current?.click()} className="flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-xs font-bold transition-colors border border-white/5">
+                            <Upload size={16} /> Load Preset
+                        </button>
+                        <input type="file" ref={fileInputRef} className="hidden" accept=".json,.klc" onChange={performLoad} />
+                     </>
+                 )}
+            </div>
+            
+            <button 
+                onClick={onClose}
+                className="px-6 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-bold text-sm shadow-lg shadow-indigo-500/20 transition-all"
+            >
+                Done
+            </button>
+        </div>
+
       </div>
     </div>
   );
