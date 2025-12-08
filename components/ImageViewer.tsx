@@ -1,7 +1,5 @@
-
-
 import React, { useState, useRef, useEffect } from 'react';
-import { X, ZoomIn, ZoomOut, Maximize, ChevronLeft, ChevronRight, Eye, EyeOff, Repeat, Trash2 } from 'lucide-react';
+import { X, ZoomIn, ZoomOut, Maximize, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Eye, EyeOff, Repeat, Trash2, Info } from 'lucide-react';
 import { QueueItem } from '../types';
 
 interface ImageViewerProps {
@@ -9,13 +7,16 @@ interface ImageViewerProps {
   onClose: () => void;
   onRepeat?: () => void;
   onDelete?: () => void;
+  onDetails?: () => void;
   onNext?: () => void;
   onPrev?: () => void;
+  onFirst?: () => void;
+  onLast?: () => void;
   hasNext: boolean;
   hasPrev: boolean;
 }
 
-const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onRepeat, onDelete, onNext, onPrev, hasNext, hasPrev }) => {
+const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onRepeat, onDelete, onDetails, onNext, onPrev, onFirst, onLast, hasNext, hasPrev }) => {
   const [scale, setScale] = useState(1);
   const [position, setPosition] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
@@ -25,16 +26,12 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onRepeat, onDe
   const imgRef = useRef<HTMLImageElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Determine which URL to show
-  // If showOriginal is true, show thumbnail (source).
-  // If result exists, show result. Else show thumbnail (source).
   const resultUrl = item.result?.url;
   const sourceUrl = item.thumbnailUrl;
   
-  const displayUrl = showOriginal ? sourceUrl : (resultUrl || sourceUrl);
-  const isComparing = showOriginal;
+  // If result is available, toggle between result and source. If only source (waiting job), show source.
+  const displayUrl = (item.result && !showOriginal) ? resultUrl : sourceUrl;
 
-  // Reset zoom/view when image changes
   useEffect(() => {
     setScale(1);
     setPosition({ x: 0, y: 0 });
@@ -75,26 +72,32 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onRepeat, onDe
   };
 
   const handleKeyDown = (e: React.KeyboardEvent | KeyboardEvent) => {
-    // Only capture if this component is active
     if (e.key === 'ArrowRight' && hasNext && onNext) onNext();
     if (e.key === 'ArrowLeft' && hasPrev && onPrev) onPrev();
+    if (e.key === 'Home' && onFirst) onFirst();
+    if (e.key === 'End' && onLast) onLast();
     if (e.key === 'Escape') onClose();
     if (e.key === ' ') {
-        e.preventDefault(); // Prevent scroll
-        setShowOriginal(prev => !prev); 
+        e.preventDefault(); 
+        if (item.result) setShowOriginal(prev => !prev);
     }
     if (e.key === 'Enter' && onRepeat) {
         e.preventDefault();
         onRepeat(); 
+    }
+    if (e.key === 'Delete' && onDelete) {
+        onDelete();
+    }
+    if (e.key === 'i' && onDetails) {
+        onDetails();
     }
   };
 
   useEffect(() => {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [hasNext, hasPrev, onNext, onPrev, onRepeat]);
+  }, [hasNext, hasPrev, onNext, onPrev, onFirst, onLast, onRepeat, onDetails, item.result]);
 
-  // Focus container on mount to capture keys if using div focus
   useEffect(() => {
     if (containerRef.current) containerRef.current.focus();
   }, []);
@@ -115,24 +118,30 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onRepeat, onDe
              <div className="bg-black/60 backdrop-blur text-white px-4 py-2 rounded-lg border border-white/10 shadow-lg flex flex-col gap-1">
                 <div className="flex items-center gap-2">
                     <h3 className="font-bold text-sm text-slate-200">{item.file.name}</h3>
-                    {isComparing && <span className="text-[10px] bg-amber-500 text-black px-1.5 rounded font-bold uppercase">Original</span>}
-                    {!isComparing && item.result && <span className="text-[10px] bg-emerald-500 text-black px-1.5 rounded font-bold uppercase">Result</span>}
+                    {showOriginal && <span className="text-[10px] bg-amber-500 text-black px-1.5 rounded font-bold uppercase">Original</span>}
+                    {!showOriginal && item.result && <span className="text-[10px] bg-emerald-500 text-black px-1.5 rounded font-bold uppercase">Result</span>}
+                    {!item.result && <span className="text-[10px] bg-blue-500 text-black px-1.5 rounded font-bold uppercase">Source</span>}
                 </div>
                 <div className="flex items-center space-x-2">
                     <span className="text-xs text-indigo-300 font-mono uppercase bg-indigo-500/20 px-1.5 py-0.5 rounded">
                         {item.taskType}
                     </span>
-                    {item.personDescription && (
-                        <span className="text-xs text-slate-300 italic truncate max-w-[200px]">
-                             - {item.personDescription}
-                        </span>
-                    )}
+                    <span className="text-[10px] text-slate-500">P:{item.priority}</span>
                 </div>
              </div>
         </div>
 
         {/* Top Right Controls */}
         <div className="absolute top-4 right-4 z-30 flex items-center space-x-3">
+             {onDetails && (
+                <button 
+                  onClick={onDetails}
+                  className="p-2 bg-slate-800/80 hover:bg-slate-700 rounded-full text-white transition-colors border border-white/10 backdrop-blur"
+                  title="View Job Details (i)"
+                >
+                  <Info size={24} />
+                </button>
+             )}
              {onDelete && (
                 <button 
                   onClick={onDelete}
@@ -173,29 +182,38 @@ const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onRepeat, onDe
             onClick={() => setShowOriginal(!showOriginal)} 
             className={`p-2 rounded-full transition-colors ${showOriginal ? 'bg-amber-500/20 text-amber-400' : 'hover:bg-white/10 text-white'}`} 
             title={showOriginal ? "Showing Original (Space)" : "Showing Result (Space)"}
-            disabled={!item.result} // Disable if no result to compare
+            disabled={!item.result} 
           >
             {showOriginal ? <EyeOff size={20} /> : <Eye size={20} />}
           </button>
         </div>
 
-        {/* Prev/Next Navigation */}
-        {hasPrev && (
-            <button 
-                onClick={onPrev}
-                className="absolute left-4 top-1/2 -translate-y-1/2 z-20 p-3 bg-black/40 hover:bg-white/10 rounded-full text-white transition-colors border border-white/5 backdrop-blur group"
-            >
-                <ChevronLeft size={32} className="opacity-70 group-hover:opacity-100" />
-            </button>
-        )}
-        {hasNext && (
-            <button 
-                onClick={onNext}
-                className="absolute right-4 top-1/2 -translate-y-1/2 z-20 p-3 bg-black/40 hover:bg-white/10 rounded-full text-white transition-colors border border-white/5 backdrop-blur group"
-            >
-                <ChevronRight size={32} className="opacity-70 group-hover:opacity-100" />
-            </button>
-        )}
+        {/* Navigation Controls */}
+        <div className="absolute left-4 top-1/2 -translate-y-1/2 z-20 flex flex-col gap-2">
+            {onFirst && (
+                 <button onClick={onFirst} className="p-3 bg-black/40 hover:bg-white/10 rounded-full text-white transition-colors border border-white/5 backdrop-blur group" title="First Image (Home)">
+                    <ChevronsLeft size={24} className="opacity-70 group-hover:opacity-100" />
+                 </button>
+            )}
+            {hasPrev && (
+                <button onClick={onPrev} className="p-3 bg-black/40 hover:bg-white/10 rounded-full text-white transition-colors border border-white/5 backdrop-blur group" title="Previous Image (Left Arrow)">
+                    <ChevronLeft size={32} className="opacity-70 group-hover:opacity-100" />
+                </button>
+            )}
+        </div>
+
+        <div className="absolute right-4 top-1/2 -translate-y-1/2 z-20 flex flex-col gap-2">
+            {hasNext && (
+                <button onClick={onNext} className="p-3 bg-black/40 hover:bg-white/10 rounded-full text-white transition-colors border border-white/5 backdrop-blur group" title="Next Image (Right Arrow)">
+                    <ChevronRight size={32} className="opacity-70 group-hover:opacity-100" />
+                </button>
+            )}
+             {onLast && (
+                 <button onClick={onLast} className="p-3 bg-black/40 hover:bg-white/10 rounded-full text-white transition-colors border border-white/5 backdrop-blur group" title="Last Image (End)">
+                    <ChevronsRight size={24} className="opacity-70 group-hover:opacity-100" />
+                 </button>
+            )}
+        </div>
 
         {/* Image Area */}
         <div 

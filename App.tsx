@@ -1,25 +1,22 @@
-
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useLogger } from './services/loggerService';
 import { generateLineArtTask, detectPeople, generateFilename } from './services/geminiService';
-import { saveWorkspace, loadWorkspace } from './services/dbService';
+import { saveWorkspace, loadWorkspace, clearWorkspace } from './services/dbService';
+import { convertBlobUrlToJpeg, addExifToJpeg } from './services/exifService';
 import Console from './components/Console';
 import ImageViewer from './components/ImageViewer';
 import ManualDialog from './components/ManualDialog';
 import OptionsDialog from './components/OptionsDialog';
+import { JobDetailsDialog } from './components/JobDetailsDialog';
 import { QueueItem, ProcessingStatus, LogLevel, AppOptions, SourceImage, TaskType, PriorityLevel } from './types';
-import { 
-    Upload, RefreshCw, Play, Pause, Trash2, Key, Save, FolderOpen, Terminal, Book, 
-    Settings, Image as ImageIcon, Layers, User, AlertTriangle, CheckCircle2, 
-    ScanFace, CheckSquare, XCircle, Info,
-    ArrowUp, ArrowDown, ArrowUpCircle, ArrowDownCircle, Mountain, Users, UserCheck, 
-    ArrowLeft, Smile, EyeOff, Accessibility, Loader2, Grip, Monitor, PieChart,
-    Palette, PenTool, Ghost, Baby, Sticker, Sword, Sparkles, Square, Wand2, Repeat,
-    Zap, Eye, Star, Heart, Bot, Map, Feather, Scroll, ZapOff, Grid, Brush, Hammer, SprayCan, Skull,
-    FileCheck, Globe, Compass, Pen, GripVertical, ChevronsUp, ShieldAlert
-} from 'lucide-react';
 import { TASK_DEFINITIONS } from './services/taskDefinitions';
 import { EMPTY_GALLERY_BACKGROUND } from './assets';
+import { 
+    Upload, RefreshCw, Play, Pause, Trash2, Key, Book, 
+    Settings, Image as ImageIcon, Layers, XCircle, Info,
+    ArrowLeft, EyeOff, Repeat, Eye, Filter, ChevronsLeft, ChevronsRight, ChevronLeft, ChevronRight,
+    Zap, ArrowUp, Activity, ChevronsUp, Eraser, Scissors, AlertTriangle, List, Grid, FolderX, CheckCircle, ShieldAlert, Ban, MousePointer2, Users
+} from 'lucide-react';
 
 // Helper for converting Blob/File to Base64 (Data URL)
 const blobToBase64 = (blob: Blob): Promise<string> => {
@@ -31,189 +28,107 @@ const blobToBase64 = (blob: Blob): Promise<string> => {
   });
 };
 
-// Memory Cleanup Helper
-const cleanupUrl = (url?: string) => {
-    if (url && url.startsWith('blob:')) {
-        URL.revokeObjectURL(url);
-    }
+const WARNING_THRESHOLD_UPLOADS = 100;
+const HARD_LIMIT_UPLOADS = 150;
+const WARNING_THRESHOLD_JOBS = 500;
+const HARD_LIMIT_JOBS = 750;
+
+// Queue definitions
+const ANALYZING_TYPES: TaskType[] = ['scan-people', 'generate-name'];
+
+// Helper to determine active queue types for Tabs
+const getQueueTypes = (queue: QueueItem[]): string[] => {
+    const types = new Set<string>();
+    queue.forEach(j => {
+        if (!ANALYZING_TYPES.includes(j.taskType)) {
+            // Group by category from TaskDefinition if possible, or just use taskType
+            const def = TASK_DEFINITIONS[j.taskType];
+            if (def) types.add(def.label);
+            else types.add(j.taskType);
+        }
+    });
+    return Array.from(types).sort();
 };
 
-// Groups for Queue Views
-type QueueViewGroup = 
-    'UPLOADS' | 'JOBS' | 'SCENES' | 'GROUPS' | 'CHARACTERS' | 'PORTRAITS' | 
-    'STYLES_WESTERN' | 'STYLES_EASTERN' | 'STYLES_FANTASY' | 'STYLES_ARTISTIC' | 'STYLES_SPECIAL' |
-    'UTILITY' | 'ISSUES';
-
-// Mapping Groups to Task Types for Filtering
-const GROUP_MAPPING: Record<string, TaskType[]> = {
-    'SCENES': ['full', 'full-nude', 'background'],
-    'GROUPS': ['all-people', 'all-people-nude'],
-    'CHARACTERS': [
-        'model-full', 'model-full-nude', 'model-full-anatomy', 'model-full-skeleton',
-        'body-front', 'body-front-nude', 'body-front-anatomy', 'body-front-skeleton',
-        'body-left', 'body-left-nude', 'body-left-anatomy', 'body-left-skeleton',
-        'body-right', 'body-right-nude', 'body-right-anatomy', 'body-right-skeleton',
-        'backside', 'nude-opposite', 'backside-anatomy', 'backside-skeleton',
-        'model', 'nude', 'neutral', 'neutral-nude'
-    ],
-    'PORTRAITS': ['face-asis', 'face', 'face-left', 'face-right', 'face-back'],
+// Helper for Failure Alerts
+const getAlertLevel = (jobs: QueueItem[]): 'NONE' | 'HIGH_FAILURE' | 'CRITICAL_FAILURE' => {
+    if (jobs.length === 0) return 'NONE';
+    const failed = jobs.filter(j => j.status === ProcessingStatus.ERROR || j.status === ProcessingStatus.ENDED);
+    if (failed.length === 0) return 'NONE';
     
-    'STYLES_WESTERN': [
-        'american-comic', 'american-comic-nude',
-        'european-comic', 'european-comic-nude',
-        'pinup', 'pinup-nude',
-        'style-ligne-claire', 'style-ligne-claire-nude',
-        'style-asterix', 'style-asterix-nude',
-        'style-spirou', 'style-spirou-nude',
-        'style-lucky', 'style-lucky-nude',
-        'style-peanuts', 'style-peanuts-nude',
-        'style-calvin', 'style-calvin-nude',
-        'style-garfield', 'style-garfield-nude',
-        'style-simpsons', 'style-simpsons-nude',
-        'style-kirby', 'style-kirby-nude',
-        'style-miller', 'style-miller-nude',
-        'style-mignola', 'style-mignola-nude',
-        'style-timm', 'style-timm-nude',
-        'style-fleischer', 'style-fleischer-nude',
-        'style-hanna', 'style-hanna-nude',
-        'style-disney', 'style-disney-nude',
-        'style-looney', 'style-looney-nude',
-        'style-archies', 'style-archies-nude',
-        'style-manara', 'style-manara-nude',
-        'style-fenzo', 'style-fenzo-nude'
-    ],
-
-    'STYLES_EASTERN': [
-        'anime', 'anime-nude',
-        'manga', 'manga-nude',
-        'chibi', 'chibi-nude',
-        'style-toriyama', 'style-toriyama-nude',
-        'style-ghibli', 'style-ghibli-nude',
-        'style-oda', 'style-oda-nude',
-        'style-jojo', 'style-jojo-nude',
-        'style-berserk', 'style-berserk-nude',
-        'style-rumiko', 'style-rumiko-nude',
-        'style-tezuka', 'style-tezuka-nude'
-    ],
-
-    'STYLES_FANTASY': [
-        'fantasy', 'fantasy-nude',
-        'elfquest', 'elfquest-nude',
-        'style-frazetta', 'style-frazetta-nude',
-        'style-vallejo', 'style-vallejo-nude',
-        'style-amano', 'style-amano-nude',
-        'style-diterlizzi', 'style-diterlizzi-nude',
-        'style-rackham', 'style-rackham-nude',
-        'style-mtg', 'style-mtg-nude',
-        'style-moebius', 'style-moebius-nude'
-    ],
-
-    'STYLES_ARTISTIC': [
-        'sketch', 'sketch-nude',
-        'impressionist', 'impressionist-nude',
-        'style-art-nouveau', 'style-art-nouveau-nude',
-        'style-art-deco', 'style-art-deco-nude',
-        'style-bauhaus', 'style-bauhaus-nude',
-        'style-cubism', 'style-cubism-nude',
-        'style-surrealism', 'style-surrealism-nude',
-        'style-expressionism', 'style-expressionism-nude',
-        'style-stained-glass', 'style-stained-glass-nude',
-        'popart', 'popart-nude',
-        'ukiyo', 'ukiyo-nude',
-        'woodcut', 'woodcut-nude',
-        'style-stipple', 'style-stipple-nude',
-        'style-hatching', 'style-hatching-nude',
-        'style-charcoal', 'style-charcoal-nude',
-        'style-ink-wash', 'style-ink-wash-nude',
-        'style-chalk', 'style-chalk-nude',
-        'style-crayon', 'style-crayon-nude',
-        'style-watercolor', 'style-watercolor-nude',
-        'style-vector', 'style-vector-nude'
-    ],
-
-    'STYLES_SPECIAL': [
-        'cyberpunk', 'cyberpunk-nude',
-        'noir', 'noir-nude',
-        'mecha', 'mecha-nude',
-        'sticker', 'sticker-nude',
-        'blueprint', 'blueprint-nude',
-        'graffiti', 'graffiti-nude',
-        'horror', 'horror-nude',
-        'style-junji-ito', 'style-junji-ito-nude',
-        'style-giger', 'style-giger-nude',
-        'style-pixel-art', 'style-pixel-art-nude',
-        'style-low-poly', 'style-low-poly-nude',
-        'style-paper-cutout', 'style-paper-cutout-nude',
-        'style-origami', 'style-origami-nude',
-        'style-claymation', 'style-claymation-nude'
-    ],
-
-    'UTILITY': ['scan-people', 'upscale', 'generate-name']
+    // Calculate rate based on completed/failed attempts vs total
+    // "more than half the jobs in a queue have failed"
+    const failureRate = failed.length / jobs.length;
+    
+    if (failureRate <= 0.5) return 'NONE';
+    
+    // Check for prohibited
+    const hasProhibited = failed.some(j => j.isBlocked);
+    return hasProhibited ? 'CRITICAL_FAILURE' : 'HIGH_FAILURE';
 };
 
-const PRIORITY_VALUES: Record<PriorityLevel, number> = {
-    'Very Low': 1,
-    'Low': 2,
-    'Normal': 3,
-    'High': 4,
-    'Very High': 5
-};
-
-interface GalleryItemCardProps {
-    item: QueueItem;
-    sourceDisplayName?: string;
-    isHighlighted: boolean;
-    isSelectedSource: boolean;
-    onSetViewerItemId: (id: string) => void;
-    onUpscale: (item: QueueItem) => void;
-    isUpscaling: boolean;
-    onRepeat: (item: QueueItem) => void;
-    onDelete: (id: string) => void;
-}
-
-const GalleryItemCard: React.FC<GalleryItemCardProps> = ({ 
-    item, sourceDisplayName, isHighlighted, isSelectedSource, onSetViewerItemId, onUpscale, isUpscaling, onRepeat, onDelete 
-}) => {
+const GalleryItemCard: React.FC<{ 
+    item: QueueItem, 
+    onSetViewerItemId: (id: string) => void, 
+    onRepeat: (item: QueueItem) => void, 
+    onDelete: (id: string) => void, 
+    onDeleteSource: (sourceId: string) => void,
+    onDetails: (id: string) => void,
+    onFilterSource: (sourceId: string) => void,
+    showPriority?: boolean
+}> = ({ item, onSetViewerItemId, onRepeat, onDelete, onDeleteSource, onDetails, onFilterSource, showPriority }) => {
      const [showOriginal, setShowOriginal] = useState(false);
      const displayUrl = showOriginal ? item.thumbnailUrl : (item.result?.url || item.thumbnailUrl);
-
-     // Selection Style: Green Border if belonging to selected source
-     const borderClass = isSelectedSource 
-        ? 'border-emerald-500 ring-2 ring-emerald-500/50' 
-        : isHighlighted 
-            ? 'border-purple-500/50' 
-            : 'border-white/5';
-            
      const isProcessing = item.status === ProcessingStatus.PROCESSING;
+     const isSuccess = item.status === ProcessingStatus.SUCCESS;
+     const isFailed = item.status === ProcessingStatus.ERROR || item.status === ProcessingStatus.ENDED;
 
      return (
-         <div className={`flex flex-col group animate-fade-in ${isProcessing ? 'order-first' : ''}`}>
-             <div className={`relative bg-[#1e1c2e] rounded-t-xl overflow-hidden cursor-zoom-in border border-b-0 transition-all duration-300 ${borderClass}`} onClick={() => onSetViewerItemId(item.id)} style={{ height: '400px' }}>
-                 <div className="absolute inset-0 flex items-center justify-center bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-5"></div>
+         <div className={`flex flex-col group relative rounded-xl overflow-hidden bg-[#1e1c2e] transition-all hover:border-purple-500/50 shadow-lg ${isSuccess ? 'border-4 border-emerald-500' : isFailed ? 'border-4 border-red-500/50' : 'border-0'}`}>
+             <div className="relative h-48 cursor-zoom-in" onClick={() => onSetViewerItemId(item.id)}>
                  {isProcessing && (
                      <div className="absolute inset-0 z-30 bg-black/60 backdrop-blur-[2px] flex items-center justify-center flex-col gap-2">
-                         <div className="w-12 h-12 border-4 border-purple-500 border-t-transparent rounded-full animate-spin"></div>
-                         <span className="text-xs font-bold text-purple-300 animate-pulse">Generating...</span>
+                         <div className="w-8 h-8 border-2 border-purple-500 border-t-transparent rounded-full animate-spin"></div>
+                         <span className="text-[10px] font-bold text-purple-300 animate-pulse">Running...</span>
                      </div>
                  )}
-                 <img src={displayUrl} className="w-full h-full object-contain p-4 transition-transform duration-300 group-hover:scale-105" />
-                 <div className="absolute top-3 left-3 flex flex-col items-start gap-1 z-20"><span className={`px-2 py-1 backdrop-blur-md text-white text-[10px] font-bold uppercase rounded tracking-wider ${isSelectedSource ? 'bg-emerald-600' : 'bg-black/60'}`}>{item.taskType}</span>{item.personDescription && <span className="px-2 py-1 bg-purple-600/80 backdrop-blur-md text-white text-[10px] rounded max-w-[150px] truncate">{item.personDescription}</span>}</div>
+                 {isFailed && !item.result && (
+                     <div className="absolute inset-0 z-20 bg-red-900/20 flex items-center justify-center">
+                         <AlertTriangle className="text-red-500 w-12 h-12 opacity-50" />
+                     </div>
+                 )}
+                 <img src={displayUrl} className="w-full h-full object-contain p-2 bg-[#13111c]" loading="lazy" />
                  
-                 {/* Quick Toggle Original */}
-                 <button 
-                    onClick={(e) => { e.stopPropagation(); setShowOriginal(!showOriginal); }}
-                    className="absolute top-3 right-3 p-2 rounded-full bg-black/60 hover:bg-white/20 backdrop-blur text-white opacity-0 group-hover:opacity-100 transition-opacity z-20"
-                    title="Toggle Original"
-                 >
-                    {showOriginal ? <EyeOff size={16} /> : <Eye size={16} />}
-                 </button>
+                 <div className="absolute top-2 left-2 flex flex-col gap-1 z-20 pointer-events-none">
+                    <span className="px-1.5 py-0.5 bg-black/60 backdrop-blur text-white text-[9px] font-bold uppercase rounded border border-white/10">{item.taskType}</span>
+                    {showPriority && <span className="px-1.5 py-0.5 bg-indigo-500/80 backdrop-blur text-white text-[9px] font-bold uppercase rounded border border-white/10 flex items-center gap-1"><Zap size={8} /> P:{item.priority}</span>}
+                 </div>
 
-                 <div className="absolute bottom-0 left-0 right-0 bg-black/70 backdrop-blur-sm px-3 py-2 text-center border-t border-white/5 opacity-0 group-hover:opacity-100 transition-opacity"><span className="text-[10px] font-mono text-slate-300 truncate block">{sourceDisplayName || item.file.name}</span></div>
+                 <div className="absolute top-2 right-2 flex flex-col gap-1 z-20">
+                     {item.result && (
+                         <button 
+                            onClick={(e) => { e.stopPropagation(); setShowOriginal(!showOriginal); }}
+                            className="p-1.5 rounded-full bg-black/60 hover:bg-white/20 backdrop-blur text-white opacity-0 group-hover:opacity-100 transition-opacity border border-white/10"
+                            title="Show Result"
+                         >
+                            {showOriginal ? <EyeOff size={14} /> : <Eye size={14} />}
+                         </button>
+                     )}
+                     <button 
+                        onClick={(e) => { e.stopPropagation(); onFilterSource(item.sourceId); }}
+                        className="p-1.5 rounded-full bg-black/60 hover:bg-indigo-500 backdrop-blur text-white opacity-0 group-hover:opacity-100 transition-opacity border border-white/10"
+                        title="Filter by Source Image"
+                     >
+                        <Filter size={14} />
+                     </button>
+                 </div>
              </div>
-             <div className={`h-12 bg-slate-800 rounded-b-xl flex divide-x divide-white/10 ${isSelectedSource ? 'border-x-2 border-b-2 border-emerald-500' : 'border border-white/5'}`}>
-                 <button onClick={() => onUpscale(item)} disabled={isUpscaling} className="flex-1 flex items-center justify-center space-x-2 text-xs font-bold text-slate-300 hover:bg-white/5 hover:text-white transition-colors disabled:opacity-50" title="Upscale to 4K">{isUpscaling ? <Loader2 size={14} className="animate-spin text-purple-400" /> : <Wand2 size={14} className="text-purple-400" />} <span>Upscale</span></button>
-                 <button onClick={() => onRepeat(item)} className="flex-1 flex items-center justify-center space-x-2 text-xs font-bold text-slate-300 hover:bg-white/5 hover:text-white transition-colors" title="Repeat this job"><Repeat size={14} /> <span>Repeat</span></button>
-                 <button onClick={() => onDelete(item.id)} className="flex-1 flex items-center justify-center space-x-2 text-xs font-bold text-slate-300 hover:bg-red-500/20 hover:text-red-400 transition-colors" title="Delete job"><Trash2 size={14} /> <span>Delete</span></button>
+             <div className="h-8 bg-[#181825] flex divide-x divide-white/5 border-t border-white/5">
+                 <button onClick={() => onSetViewerItemId(item.id)} className="flex-1 flex items-center justify-center hover:bg-white/5 text-slate-400 hover:text-white transition-colors" title="View"><ImageIcon size={14} /></button>
+                 <button onClick={() => onRepeat(item)} className="flex-1 flex items-center justify-center hover:bg-white/5 text-slate-400 hover:text-white transition-colors" title="Repeat"><Repeat size={14} /></button>
+                 <button onClick={() => onDetails(item.id)} className="flex-1 flex items-center justify-center hover:bg-white/5 text-slate-400 hover:text-white transition-colors" title="Details"><Info size={14} /></button>
+                 <button onClick={() => onDelete(item.id)} className="flex-1 flex items-center justify-center hover:bg-red-500/20 text-slate-400 hover:text-red-400 transition-colors" title="Delete Job"><Trash2 size={14} /></button>
+                 <button onClick={() => onDeleteSource(item.sourceId)} className="flex-1 flex items-center justify-center hover:bg-red-500/20 text-slate-400 hover:text-red-400 transition-colors" title="Delete Source & All Jobs"><FolderX size={14} /></button>
              </div>
          </div>
      );
@@ -224,6 +139,10 @@ export default function App() {
   const [uploads, setUploads] = useState<SourceImage[]>([]);
   const [queue, setQueue] = useState<QueueItem[]>([]); 
   
+  // Ref to track latest uploads state for async callbacks
+  const uploadsRef = useRef(uploads);
+  useEffect(() => { uploadsRef.current = uploads; }, [uploads]);
+
   // App Config State
   const [options, setOptions] = useState<AppOptions>({
     taskTypes: Object.keys(TASK_DEFINITIONS).reduce((acc, key) => {
@@ -234,111 +153,55 @@ export default function App() {
         acc[key] = 'Normal';
         return acc;
     }, {} as Record<string, PriorityLevel>),
+    stylePriorities: {}, 
     gender: 'As-is',
     detailLevel: 'Medium',
     modelPreference: 'flash',
     creativity: 0.4,
     customStyle: '',
-    modesty: 'None'
+    modesty: 'None',
+    bodyHair: {},
+    outputFormat: 'png' // Default format
   });
 
   const [maxConcurrent, setMaxConcurrent] = useState(5);
-  const [sidebarWidth, setSidebarWidth] = useState<number>(20);
+  const [sidebarWidth, setSidebarWidth] = useState<number>(25);
   const [isResizing, setIsResizing] = useState(false);
-
+  
   // UI State
-  const [activeQueueView, setActiveQueueView] = useState<QueueViewGroup>('UPLOADS');
+  const [sidebarView, setSidebarView] = useState<'SOURCES' | 'QUEUES'>('SOURCES');
+  const [activeQueueTab, setActiveQueueTab] = useState<string>('UPLOADS'); // 'UPLOADS' here means "All Results" or Main View
   const [viewerItemId, setViewerItemId] = useState<string | null>(null);
+  const [detailsJobId, setDetailsJobId] = useState<string | null>(null);
   const [isConsoleOpen, setIsConsoleOpen] = useState(false);
   const [isManualOpen, setIsManualOpen] = useState(false);
   const [isOptionsOpen, setIsOptionsOpen] = useState(false);
-  const [isDragging, setIsDragging] = useState(false);
   
-  // Single selection source ID
+  // Drag and Drop State
+  const [isDraggingOver, setIsDraggingOver] = useState(false);
+  const [dragCounter, setDragCounter] = useState(0);
+  
   const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null);
-  
-  const [thumbnailSize, setThumbnailSize] = useState<'small' | 'medium' | 'large'>('medium');
-  const [showFinishedUploads, setShowFinishedUploads] = useState(false);
-
-  const [hoveredButton, setHoveredButton] = useState<{id: string, rect: DOMRect} | null>(null);
-
-  const [isExporting, setIsExporting] = useState(false);
-  const [isImporting, setIsImporting] = useState(false);
   const [isKeyLoading, setIsKeyLoading] = useState(false);
-  const [upscalingIds, setUpscalingIds] = useState<Set<string>>(new Set());
-
-  const [gallerySortBy, setGallerySortBy] = useState<'queue' | 'filename' | 'timestamp'>('queue');
-  const [gallerySortOrder, setGallerySortOrder] = useState<'asc' | 'desc'>('asc');
+  const [filterNoPeople, setFilterNoPeople] = useState(false);
   
+  const [queueActive, setQueueActive] = useState(false);
+
   const sidebarRef = useRef<HTMLDivElement>(null);
   const galleryRef = useRef<HTMLDivElement>(null);
   const saveTimeoutRef = useRef<any>(null);
-
-  // Queue Control State (Enable/Disable Queues)
-  // Default to enabled
-  const [queueControls, setQueueControls] = useState<Record<string, boolean>>({
-      'GLOBAL': false,
-      'SCENES': true,
-      'GROUPS': true,
-      'CHARACTERS': true,
-      'PORTRAITS': true,
-      'STYLES_WESTERN': true,
-      'STYLES_EASTERN': true,
-      'STYLES_FANTASY': true,
-      'STYLES_ARTISTIC': true,
-      'STYLES_SPECIAL': true,
-      'UTILITY': true
-  });
-
-  const { addLog } = useLogger();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const { addLog } = useLogger();
 
-  // Sidebar Resizing Logic
-  const startResizing = useCallback(() => {
-    setIsResizing(true);
-  }, []);
-
-  const stopResizing = useCallback(() => {
-    setIsResizing(false);
-  }, []);
-
-  const resize = useCallback((mouseMoveEvent: MouseEvent) => {
-    if (isResizing) {
-        const newWidth = (mouseMoveEvent.clientX / window.innerWidth) * 100;
-        if (newWidth >= 10 && newWidth <= 50) {
-            setSidebarWidth(newWidth);
-        }
-    }
-  }, [isResizing]);
-
-  useEffect(() => {
-    window.addEventListener("mousemove", resize);
-    window.addEventListener("mouseup", stopResizing);
-    return () => {
-        window.removeEventListener("mousemove", resize);
-        window.removeEventListener("mouseup", stopResizing);
-    };
-  }, [resize, stopResizing]);
-  
-  // Scrolling Helpers
-  const scrollToSidebarTop = () => sidebarRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
-  const scrollToSidebarBottom = () => sidebarRef.current?.scrollTo({ top: sidebarRef.current.scrollHeight, behavior: 'smooth' });
-  const scrollToGalleryTop = () => galleryRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
-  const scrollToGalleryBottom = () => galleryRef.current?.scrollTo({ top: galleryRef.current.scrollHeight, behavior: 'smooth' });
-
-  // --- INITIALIZATION ---
+  // Initialization
   useEffect(() => {
     const init = async () => {
         const state = await loadWorkspace();
         if (state) {
             setUploads(state.uploads);
-            setQueue(state.queue);
-            setOptions(prev => ({
-                ...prev,
-                ...state.options,
-                taskPriorities: { ...prev.taskPriorities, ...(state.options.taskPriorities || {}) },
-                taskTypes: { ...prev.taskTypes, ...(state.options.taskTypes || {}) }
-            }));
+            // Migrate queue to ensure priority exists
+            setQueue(state.queue.map(q => ({...q, priority: q.priority ?? 50})));
+            setOptions(prev => ({ ...prev, ...state.options, outputFormat: state.options.outputFormat || 'png' }));
             addLog(LogLevel.INFO, "Restored previous workspace.");
         }
     };
@@ -355,924 +218,1112 @@ export default function App() {
     return () => { if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current); };
   }, [uploads, queue, options]);
 
-  const processingJobs = queue.filter(i => i.status === ProcessingStatus.PROCESSING);
-  
-  const getQueueItems = (view: QueueViewGroup): QueueItem[] => {
-      switch (view) {
-          case 'JOBS': return processingJobs;
-          case 'ISSUES': return queue.filter(i => i.status === ProcessingStatus.ERROR || i.status === ProcessingStatus.ENDED);
-          case 'UPLOADS': return []; // Handled separately
-          default:
-              const types = GROUP_MAPPING[view];
-              if (!types) return [];
-              return queue.filter(i => types.includes(i.taskType) && i.status === ProcessingStatus.PENDING);
-      }
-  };
+  // Sidebar Resizing
+  const startResizing = useCallback(() => setIsResizing(true), []);
+  const stopResizing = useCallback(() => setIsResizing(false), []);
+  const resize = useCallback((e: MouseEvent) => {
+    if (isResizing) setSidebarWidth(Math.max(15, Math.min(50, (e.clientX / window.innerWidth) * 100)));
+  }, [isResizing]);
 
-  const getQueueStats = (view: QueueViewGroup): string | number => {
-    if (view === 'UPLOADS') return uploads.length;
-    if (view === 'JOBS') return processingJobs.length;
-    if (view === 'ISSUES') return getQueueItems('ISSUES').length;
-
-    const types = GROUP_MAPPING[view];
-    if (types) {
-        const allItems = queue.filter(j => types.includes(j.taskType));
-        const total = allItems.length;
-        const unfinished = allItems.filter(j => 
-            j.status === ProcessingStatus.PENDING || 
-            j.status === ProcessingStatus.PROCESSING || 
-            (j.status === ProcessingStatus.ERROR && !j.isBlocked && j.retryCount < 3)
-        ).length;
-        return `${unfinished}/${total}`;
-    }
-    return 0;
-  };
-
-  // --- Gallery Filtering Logic ---
-  // Base Candidates: All Successful images OR Active Processing jobs
-  const allGalleryCandidates = queue.filter(i => 
-      i.status === ProcessingStatus.SUCCESS || 
-      i.status === ProcessingStatus.PROCESSING
-  );
-  
-  let galleryItems: QueueItem[] = [];
-  const mappedTypes = GROUP_MAPPING[activeQueueView];
-
-  if (mappedTypes) {
-      // If viewing a specific category (Scenes, Styles, etc.), strict filter
-      // This includes UTILITY tab (which allows scans/upscales to show)
-      galleryItems = allGalleryCandidates.filter(i => mappedTypes.includes(i.taskType));
-  } else {
-      // Default views (Uploads, Jobs, Issues) - Show All Results
-      // We filter out internal "utility" tasks (scans/name-generation) to keep the gallery clean,
-      // unless specifically in Utility tab.
-      galleryItems = allGalleryCandidates.filter(i => 
-          i.taskType !== 'scan-people' && 
-          i.taskType !== 'generate-name'
-      );
-  }
-
-  // Sorting
-  galleryItems.sort((a, b) => {
-      // 0. Running jobs ALWAYS on top
-      const aRunning = a.status === ProcessingStatus.PROCESSING;
-      const bRunning = b.status === ProcessingStatus.PROCESSING;
-      if (aRunning && !bRunning) return -1;
-      if (!aRunning && bRunning) return 1;
-
-      // 1. Priority: Selected Source ID comes first
-      if (selectedSourceId) {
-          if (a.sourceId === selectedSourceId && b.sourceId !== selectedSourceId) return -1;
-          if (a.sourceId !== selectedSourceId && b.sourceId === selectedSourceId) return 1;
-      }
-
-      // 2. Existing Sort Logic
-      let comparison = 0;
-      switch (gallerySortBy) {
-          case 'queue': comparison = a.taskType.localeCompare(b.taskType); break;
-          case 'filename': 
-              comparison = a.file.name.localeCompare(b.file.name);
-              if (comparison === 0) comparison = a.taskType.localeCompare(b.taskType);
-              break;
-          case 'timestamp': comparison = a.timestamp - b.timestamp; break;
-      }
-      return gallerySortOrder === 'asc' ? comparison : -comparison;
-  });
-
-  const getViewerNav = () => {
-    if (!viewerItemId) return { hasPrev: false, hasNext: false, onPrev: undefined, onNext: undefined };
-    const idx = galleryItems.findIndex(i => i.id === viewerItemId);
-    if (idx === -1) return { hasPrev: false, hasNext: false, onPrev: undefined, onNext: undefined };
-    return {
-        hasPrev: idx > 0,
-        hasNext: idx < galleryItems.length - 1,
-        onPrev: idx > 0 ? () => setViewerItemId(galleryItems[idx - 1].id) : undefined,
-        onNext: idx < galleryItems.length - 1 ? () => setViewerItemId(galleryItems[idx + 1].id) : undefined
+  useEffect(() => {
+    window.addEventListener("mousemove", resize);
+    window.addEventListener("mouseup", stopResizing);
+    return () => {
+        window.removeEventListener("mousemove", resize);
+        window.removeEventListener("mouseup", stopResizing);
     };
-  };
-  const viewerNav = getViewerNav();
-  const totalJobs = queue.length;
-  const completedJobs = queue.filter(i => i.status === ProcessingStatus.SUCCESS || i.status === ProcessingStatus.ENDED || (i.status === ProcessingStatus.ERROR && (i.isBlocked || i.retryCount >= 3))).length;
-  const progressPercent = totalJobs > 0 ? (completedJobs / totalJobs) * 100 : 0;
+  }, [resize, stopResizing]);
 
-  const activeJobs = processingJobs;
-  let statusMessage = "Ready";
-  
-  if (activeJobs.length > 0) {
-      const scanning = activeJobs.filter(j => j.taskType === 'scan-people');
-      const naming = activeJobs.filter(j => j.taskType === 'generate-name');
-      const generating = activeJobs.filter(j => j.taskType !== 'scan-people' && j.taskType !== 'generate-name');
+  // --- Bulk Queue Actions ---
+  const retryAllFailed = () => {
+      setQueue(prev => prev.map(j => j.status === ProcessingStatus.ERROR ? { ...j, status: ProcessingStatus.PENDING, retryCount: 0, priority: 60 } : j));
+      addLog(LogLevel.INFO, "Retrying all failed jobs.");
+  };
+
+  const deleteAllFailed = () => {
+      setQueue(prev => prev.filter(j => j.status !== ProcessingStatus.ERROR));
+      addLog(LogLevel.INFO, "Deleted all failed jobs.");
+  };
+
+  const deleteAllDead = () => {
+      setQueue(prev => prev.filter(j => j.status !== ProcessingStatus.ENDED));
+      addLog(LogLevel.INFO, "Deleted all dead jobs.");
+  };
+
+  const boostAllWaiting = () => {
+      setQueue(prev => prev.map(j => j.status === ProcessingStatus.PENDING ? { ...j, priority: j.priority + 1 } : j));
+      addLog(LogLevel.INFO, "Boosted all waiting jobs by +1.");
+  };
+
+  const clearGallery = () => {
+      // Remove SUCCESS jobs (Display jobs)
+      setQueue(prev => prev.filter(j => j.status === ProcessingStatus.SUCCESS));
+      addLog(LogLevel.INFO, "Cleared all finished jobs from gallery.");
+  };
+
+  const pruneUploads = () => {
+      // Keep uploads that have PENDING or PROCESSING jobs
+      const activeSourceIds = new Set(queue.filter(j => j.status === ProcessingStatus.PENDING || j.status === ProcessingStatus.PROCESSING).map(j => j.sourceId));
       
-      // Prioritize generation status text over scanning status text to reflect new priority
-      if (generating.length > 0) {
-          const job = generating[0];
-          statusMessage = `AI Thinking: Generating ${job.taskType} artwork for ${job.file.name}... (${generating.length} active)`;
-      } else if (scanning.length > 0) {
-          statusMessage = `AI Status: Scanning ${scanning[0].file.name} for human subjects...`;
-      } else if (naming.length > 0) {
-          statusMessage = `AI Status: Analyzing ${naming[0].file.name} to generate descriptive filename...`;
-      }
-  }
-
-  const handleUpload = useCallback((files: FileList | null) => {
-    if (!files) return;
-    const newUploads: SourceImage[] = [];
-    const currentOptionsSnapshot = JSON.parse(JSON.stringify(options));
-    Array.from(files).filter(f => f.type.startsWith('image/')).forEach(file => {
-       if (uploads.some(u => u.file.name === file.name)) return;
-       const id = crypto.randomUUID();
-       newUploads.push({ 
-           id, 
-           file, 
-           thumbnailUrl: URL.createObjectURL(file), 
-           timestamp: Date.now(), 
-           options: currentOptionsSnapshot,
-           // Initial display name is file name until generated
-           displayName: undefined,
-           priorityCount: 0
-       });
-    });
-    if (newUploads.length > 0) {
-      setUploads(prev => [...prev, ...newUploads]);
-      addLog(LogLevel.INFO, `Uploaded ${newUploads.length} images.`);
-      populateQueues(newUploads);
-    }
-  }, [options, addLog, uploads]);
-
-  const populateQueues = (sources: SourceImage[]) => {
-    const newJobs: QueueItem[] = [];
-    sources.forEach(source => {
-      const srcOpts = source.options;
-      if (srcOpts.taskTypes.full) newJobs.push(createJob(source, 'full'));
-      if (srcOpts.taskTypes['full-nude']) newJobs.push(createJob(source, 'full-nude'));
-      if (srcOpts.taskTypes.background) newJobs.push(createJob(source, 'background'));
+      const toRemove = uploads.filter(u => !activeSourceIds.has(u.id));
       
-      // Auto-Spawn Utility Tasks
-      newJobs.push(createJob(source, 'scan-people')); 
-      newJobs.push(createJob(source, 'generate-name'));
-    });
-    setQueue(prev => [...prev, ...newJobs]);
-  };
-
-  const createJob = (source: SourceImage, taskType: TaskType, personDescription?: string, detectBox?: number[]): QueueItem => ({
-        id: crypto.randomUUID(),
-        sourceId: source.id,
-        file: source.file,
-        taskType: taskType,
-        personDescription,
-        detectBox,
-        thumbnailUrl: source.thumbnailUrl,
-        status: ProcessingStatus.PENDING,
-        timestamp: Date.now(),
-        retryCount: 0,
-        maxRetries: 3,
-        errorHistory: []
-  });
-
-  const createAuditLog = (source: SourceImage) => {
-    const jobs = queue.filter(j => j.sourceId === source.id);
-    const log = {
-        originalImage: source.file.name,
-        sourceOptions: source.options,
-        processedAt: new Date().toISOString(),
-        jobs: jobs.map(j => ({
-            task: j.taskType,
-            status: j.status,
-            resultFilename: j.result ? `${j.taskType}-${source.displayName || source.file.name.split('.')[0]}.png` : null,
-            prompt: j.result?.prompt || "N/A",
-            description: TASK_DEFINITIONS[j.taskType]?.description || "Utility Task",
-            error: j.errorMessage
-        }))
-    };
-    return JSON.stringify(log, null, 2);
-  };
-
-  const deleteUpload = (id: string) => {
-    const upload = uploads.find(u => u.id === id);
-    if (upload) {
-        // Generate and download KLA
-        const json = createAuditLog(upload);
-        const blob = new Blob([json], {type: 'application/json'});
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `${upload.file.name.split('.')[0]}.kla`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-        
-        cleanupUrl(upload.thumbnailUrl);
-    }
-
-    setUploads(prev => prev.filter(u => u.id !== id));
-    setQueue(prev => prev.filter(j => j.sourceId !== id));
-    if (selectedSourceId === id) setSelectedSourceId(null);
-  };
-
-  const deleteJob = (id: string) => {
-    const job = queue.find(j => j.id === id);
-    if (job) cleanupUrl(job.result?.url);
-    setQueue(prev => prev.filter(j => j.id !== id));
-  };
-
-  const handleDeleteAllInQueue = (view: QueueViewGroup) => {
-     if (view === 'UPLOADS') {
-         if (window.confirm("Delete all uploads? This will also remove all associated jobs.")) {
-             uploads.forEach(u => deleteUpload(u.id));
-             setSelectedSourceId(null);
-         }
-         return;
-     }
-
-     const itemsToDelete = getQueueItems(view);
-     if (itemsToDelete.length === 0) return;
-     
-     if (window.confirm(`Delete ${itemsToDelete.length} items from ${view}?`)) {
-        itemsToDelete.forEach(job => cleanupUrl(job.result?.url));
-        const idsToDelete = new Set(itemsToDelete.map(j => j.id));
-        setQueue(prev => prev.filter(j => !idsToDelete.has(j.id)));
-        addLog(LogLevel.INFO, `Bulk deleted items from ${view}`);
-     }
-  };
-  
-  const handleClearFinished = () => {
-      const finishedJobs = queue.filter(j => j.status === ProcessingStatus.SUCCESS || j.status === ProcessingStatus.ENDED);
-      if (finishedJobs.length === 0) return;
-      if (window.confirm(`Clear ${finishedJobs.length} finished jobs from view? (This does not delete source images)`)) {
-          finishedJobs.forEach(job => cleanupUrl(job.result?.url));
-          const idsToDelete = new Set(finishedJobs.map(j => j.id));
-          setQueue(prev => prev.filter(j => !idsToDelete.has(j.id)));
-          addLog(LogLevel.INFO, `Cleared finished jobs.`);
-      }
-  };
-
-  const handleDeleteFinishedSources = () => {
-      const sourcesToDelete: string[] = [];
-
-      uploads.forEach(upload => {
-          const jobs = queue.filter(j => j.sourceId === upload.id);
-          
-          if (jobs.length === 0) return;
-
-          // A job is "done or died" if it is SUCCESS or ENDED.
-          // ERROR means it might be retried (unless it reached max retries, which sets it to ENDED anyway).
-          const allSettled = jobs.every(j => 
-              j.status === ProcessingStatus.SUCCESS || 
-              j.status === ProcessingStatus.ENDED 
-          );
-
-          if (allSettled) {
-              sourcesToDelete.push(upload.id);
-          }
-      });
-
-      if (sourcesToDelete.length === 0) {
-          alert("No completely finished images found to delete.");
+      if (toRemove.length === 0) {
+          alert("No unused uploads found.");
           return;
       }
 
-      if (window.confirm(`Delete ${sourcesToDelete.length} images where all jobs are finished or dead?`)) {
-          sourcesToDelete.forEach(id => deleteUpload(id));
-          addLog(LogLevel.INFO, `Deleted ${sourcesToDelete.length} finished source images.`);
+      if (confirm(`Remove ${toRemove.length} uploads that have no active jobs? This will also remove their finished/failed history.`)) {
+          const removeIds = new Set(toRemove.map(u => u.id));
+          setUploads(prev => prev.filter(u => !removeIds.has(u.id)));
+          // Clean up any lingering non-active jobs for these sources
+          setQueue(prev => prev.filter(j => !removeIds.has(j.sourceId)));
+          // Reset Selection if needed
+          if (selectedSourceId && removeIds.has(selectedSourceId)) setSelectedSourceId(null);
+          addLog(LogLevel.INFO, `Pruned ${toRemove.length} unused uploads.`);
       }
   };
 
-  const retryJob = (item: QueueItem) => {
-      setQueue(prev => prev.map(i => i.id === item.id ? { 
-          ...i, 
-          status: ProcessingStatus.PENDING, 
-          retryCount: 0, 
-          isBlocked: false,
-          isLastChance: false,
-          errorMessage: undefined,
-          errorHistory: [],
-          timestamp: Date.now() // Send to back of queue
-      } : i));
-  };
-
-  const retrySourceJobs = (sourceId: string) => {
+  const boostQueue = (category: string) => {
       setQueue(prev => prev.map(j => {
-          if (j.sourceId === sourceId && (j.status === ProcessingStatus.ERROR || j.status === ProcessingStatus.ENDED)) {
-               return {
-                   ...j,
-                   status: ProcessingStatus.PENDING,
-                   retryCount: 0,
-                   isBlocked: false,
-                   isLastChance: false,
-                   errorMessage: undefined,
-                   errorHistory: [],
-                   timestamp: Date.now() // Send to back of queue
-               };
+          if (j.status !== ProcessingStatus.PENDING) return j;
+          const def = TASK_DEFINITIONS[j.taskType];
+          // Check for exact match or category match
+          const matches = (def && def.label === category) || j.taskType === category || (category === 'Pending' && j.status === ProcessingStatus.PENDING);
+          if (matches) {
+              return { ...j, priority: j.priority + 5 };
           }
           return j;
       }));
-  };
-  
-  const clearDeadSourceJobs = (sourceId: string) => {
-      const deadJobs = queue.filter(j => j.sourceId === sourceId && j.status === ProcessingStatus.ENDED);
-      deadJobs.forEach(job => cleanupUrl(job.result?.url));
-      const idsToDelete = new Set(deadJobs.map(j => j.id));
-      setQueue(prev => prev.filter(j => !idsToDelete.has(j.id)));
-  };
-  
-  const handleRetryAllIssues = () => {
-    setQueue(prev => prev.map(j => {
-         if (j.status === ProcessingStatus.ERROR || j.status === ProcessingStatus.ENDED) {
-             return {
-               ...j,
-               status: ProcessingStatus.PENDING,
-               retryCount: 0,
-               isBlocked: false,
-               isLastChance: false,
-               errorMessage: undefined,
-               errorHistory: [],
-               timestamp: Date.now()
-             };
-         }
-         return j;
-    }));
-    addLog(LogLevel.INFO, "Retrying all failed/ended jobs.");
+      addLog(LogLevel.INFO, `Boosted queue '${category}' by +5.`);
   };
 
-  const repeatJob = (item: QueueItem) => {
-    setQueue(prev => [...prev, { ...item, id: crypto.randomUUID(), status: ProcessingStatus.PENDING, result: undefined, retryCount: 0, errorHistory: [], timestamp: Date.now(), isLastChance: false }]);
+  // Helper actions for gallery context
+  const retrySelection = (items: QueueItem[]) => {
+      const ids = new Set(items.filter(j => j.status === ProcessingStatus.ERROR || j.status === ProcessingStatus.ENDED).map(j => j.id));
+      setQueue(prev => prev.map(j => ids.has(j.id) ? { ...j, status: ProcessingStatus.PENDING, retryCount: 0, priority: 60, errorHistory: [] } : j));
+      addLog(LogLevel.INFO, `Retrying ${ids.size} failed items in selection.`);
   };
 
-  const handleUpscale = async (item: QueueItem) => {
-      if (!item.result?.url) return;
-      setUpscalingIds(prev => { const next = new Set(prev); next.add(item.id); return next; });
-      try {
-          const res = await fetch(item.result.url);
-          const blob = await res.blob();
-          const file = new File([blob], `source-for-upscale.png`, { type: 'image/png' });
-          setQueue(prev => [...prev, { id: crypto.randomUUID(), sourceId: item.sourceId, file: file, taskType: 'upscale', thumbnailUrl: item.result!.url, status: ProcessingStatus.PENDING, timestamp: Date.now(), retryCount: 0, maxRetries: 3, errorHistory: [], personDescription: item.personDescription }]);
-      } catch (e) { addLog(LogLevel.ERROR, "Upscale failed", e); } 
-      finally { setUpscalingIds(prev => { const next = new Set(prev); next.delete(item.id); return next; }); }
-  };
-  
-  const handlePrioritize = (sourceId: string) => {
-      const pendingForSource = queue.filter(j => j.sourceId === sourceId && j.status === ProcessingStatus.PENDING);
-      if (pendingForSource.length === 0) return;
-
-      // Move to front by setting timestamp way back (1 minute before oldest)
-      const currentMin = queue.length > 0 ? Math.min(...queue.map(q => q.timestamp)) : Date.now();
-      const newTime = currentMin - 60000;
-      
-      setQueue(prev => prev.map(j => {
-          if (j.sourceId === sourceId && j.status === ProcessingStatus.PENDING) {
-              return { ...j, timestamp: newTime };
-          }
-          return j;
-      }));
-
-      // Increment priority count for sorting
-      setUploads(prev => prev.map(u => u.id === sourceId ? { ...u, priorityCount: (u.priorityCount || 0) + 1 } : u));
-
-      addLog(LogLevel.INFO, `Prioritized ${pendingForSource.length} jobs for source.`);
+  const deleteFailedInSelection = (items: QueueItem[]) => {
+      const ids = new Set(items.filter(j => j.status === ProcessingStatus.ERROR || j.status === ProcessingStatus.ENDED).map(j => j.id));
+      setQueue(prev => prev.filter(j => !ids.has(j.id)));
+      addLog(LogLevel.INFO, `Deleted ${ids.size} failed items in selection.`);
   };
 
-  const downloadImage = (url: string, sourceId: string, taskType: string) => {
-      const source = uploads.find(u => u.id === sourceId);
-      
-      // Get clean style name from definition
-      const def = TASK_DEFINITIONS[taskType as TaskType];
-      const stylePrefix = def ? def.label.replace(/\s+/g, '') : taskType;
-
-      const baseName = source?.displayName || source?.file.name.replace(/\.[^/.]+$/, "") || "image";
-      const filename = `${stylePrefix}-${baseName}.png`;
-      
-      const link = document.createElement('a'); link.href = url; link.download = filename;
-      document.body.appendChild(link); link.click(); document.body.removeChild(link);
+  const deleteAllInSelection = (items: QueueItem[]) => {
+      const ids = new Set(items.map(j => j.id));
+      setQueue(prev => prev.filter(j => !ids.has(j.id)));
+      addLog(LogLevel.INFO, `Deleted ${ids.size} items in selection.`);
   };
 
-  // --- Processing Loop ---
+
+  // --- Core Processing Logic ---
   useEffect(() => {
-    if (!queueControls.GLOBAL) return;
+    if (!queueActive) return;
+
     const runProcessor = async () => {
-        // Separate counts for Utility vs Generation
-        const UTILITY_TYPES = ['scan-people', 'generate-name'];
-        const activeUtilCount = processingJobs.filter(j => UTILITY_TYPES.includes(j.taskType)).length;
-        const activeGenCount = processingJobs.filter(j => !UTILITY_TYPES.includes(j.taskType)).length;
-        
-        // Limits
-        // Max 1 utility job at a time to ensure metadata flows but doesn't spam
-        const MAX_UTIL = 1;
-        const MAX_GEN = maxConcurrent;
-
-        // If both lanes are full, return
-        if (activeUtilCount >= MAX_UTIL && activeGenCount >= MAX_GEN) return;
-
-        const activeTaskTypes = new Set(processingJobs.map(j => j.taskType));
-        
-        let candidates: { item: QueueItem, priority: number }[] = [];
-        
-        const isTypeAllowed = (type: TaskType) => {
-            const groupEntry = Object.entries(GROUP_MAPPING).find(([g, types]) => types.includes(type));
-            if (!groupEntry) return true; 
-            return queueControls[groupEntry[0]];
-        };
-
-        // NEW LOGIC: Iterate all pending items. 
-        // Assign configured priority (default 3) to tasks.
-        queue.forEach(item => {
-            if (item.status === ProcessingStatus.PENDING && !activeTaskTypes.has(item.taskType)) {
-                
-                // LANE CHECK
-                const isUtil = UTILITY_TYPES.includes(item.taskType);
-                if (isUtil && activeUtilCount >= MAX_UTIL) return; // Utility lane full
-                if (!isUtil && activeGenCount >= MAX_GEN) return; // Gen lane full
-
-                if (isTypeAllowed(item.taskType)) {
-                     let priority = 0;
-                     if (isUtil) {
-                         // Boost utility priority slightly so they get picked if slots allow
-                         priority = 6; 
-                     } else {
-                         const prioStr = options.taskPriorities[item.taskType] || 'Normal';
-                         priority = PRIORITY_VALUES[prioStr];
-                     }
-                     candidates.push({ item, priority });
-                }
-            }
-        });
-        
-        if (candidates.length === 0) return;
-        
-        // Sort: Priority (Desc), then Timestamp (Asc -> Oldest First)
-        candidates.sort((a, b) => {
-            if (a.priority !== b.priority) return b.priority - a.priority;
-            return a.item.timestamp - b.item.timestamp;
-        });
-        
-        const job = candidates[0].item;
-
-        setQueue(prev => prev.map(i => i.id === job.id ? { ...i, status: ProcessingStatus.PROCESSING } : i));
         const apiKey = process.env.API_KEY || '';
-        if (!apiKey) { handleJobError(job, "Missing API Key", true); return; }
+        
+        // Split jobs by lane
+        const analyzingJobs = queue.filter(j => 
+            j.status === ProcessingStatus.PROCESSING && ANALYZING_TYPES.includes(j.taskType)
+        );
+        const generatingJobs = queue.filter(j => 
+            j.status === ProcessingStatus.PROCESSING && !ANALYZING_TYPES.includes(j.taskType)
+        );
+
+        // --- LANE 1: ANALYZING (Max 3) ---
+        if (analyzingJobs.length < 3) {
+            const candidates = queue
+                .filter(j => j.status === ProcessingStatus.PENDING && ANALYZING_TYPES.includes(j.taskType))
+                .sort((a, b) => b.priority - a.priority || a.timestamp - b.timestamp); // High priority first, then FIFO
+
+            if (candidates.length > 0) {
+                const job = candidates[0];
+                startJob(job, apiKey);
+            }
+        }
+
+        // --- LANE 2: GENERATING (Configurable Max) ---
+        if (generatingJobs.length < maxConcurrent) {
+             const candidates = queue
+                .filter(j => j.status === ProcessingStatus.PENDING && !ANALYZING_TYPES.includes(j.taskType))
+                .sort((a, b) => b.priority - a.priority || a.timestamp - b.timestamp);
+
+            if (candidates.length > 0) {
+                const job = candidates[0];
+                startJob(job, apiKey);
+            }
+        }
+    };
+
+    const startJob = async (job: QueueItem, apiKey: string) => {
+        if (!apiKey) { handleJobError(job, "Missing API Key", false); return; }
+        
+        // Optimistic update to PROCESSING
+        setQueue(prev => prev.map(i => i.id === job.id ? { ...i, status: ProcessingStatus.PROCESSING } : i));
 
         try {
-            const source = uploads.find(u => u.id === job.sourceId);
-            const jobOptions = source?.options || options; 
-            
+            const source = uploadsRef.current.find(u => u.id === job.sourceId);
+            const jobOptions = source?.options || options;
+
             if (job.taskType === 'scan-people') {
                 await handleScanning(job, apiKey, jobOptions);
             } else if (job.taskType === 'generate-name') {
-                const generatedName = await generateFilename(job.file, apiKey);
-                // Update Source Image with new name
-                setUploads(prev => prev.map(u => u.id === job.sourceId ? { ...u, displayName: generatedName } : u));
-                // Mark job as success
-                setQueue(prev => prev.map(i => i.id === job.id ? { ...i, status: ProcessingStatus.SUCCESS, timestamp: Date.now() } : i));
-                addLog(LogLevel.INFO, `Renamed ${job.file.name} to ${generatedName}`);
+                 const name = await generateFilename(job.file, apiKey);
+                 setUploads(prev => prev.map(u => u.id === job.sourceId ? { ...u, displayName: name } : u));
+                 setQueue(prev => prev.map(i => i.id === job.id ? { ...i, status: ProcessingStatus.SUCCESS } : i));
             } else {
-                await handleGeneration(job, apiKey, jobOptions);
+                 const res = await generateLineArtTask(job.file, apiKey, job.taskType, jobOptions, addLog, undefined, job.personDescription);
+                 
+                 // Handle Auto-download and Format Conversion
+                 if (res.url) {
+                     // Fetch latest source info (in case name generation finished while we were generating art)
+                     const currentSource = uploadsRef.current.find(u => u.id === job.sourceId);
+                     const baseName = currentSource?.displayName || currentSource?.file.name.split('.')[0] || "image";
+                     const safeName = baseName.replace(/[^a-z0-9-_]/gi, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').toLowerCase();
+                     
+                     const outputFormat = jobOptions.outputFormat || 'png';
+                     
+                     if (outputFormat === 'jpg') {
+                         try {
+                            // Convert PNG to JPG and add EXIF
+                            const jpegData = await convertBlobUrlToJpeg(res.url);
+                            const modelName = jobOptions.modelPreference === 'pro' ? 'Gemini 3 Pro Image' : 'Gemini 2.5 Flash Image';
+                            
+                            const exifJpeg = addExifToJpeg(jpegData, {
+                                filename: safeName,
+                                style: job.taskType,
+                                model: modelName
+                            });
+                            
+                            // Download as JPG
+                            const a = document.createElement('a');
+                            a.href = exifJpeg;
+                            a.download = `${job.taskType}-${safeName}.jpg`;
+                            document.body.appendChild(a);
+                            a.click();
+                            document.body.removeChild(a);
+
+                         } catch (conversionErr) {
+                             console.error("Failed to convert/export JPG", conversionErr);
+                             // Fallback to PNG download if JPG processing fails
+                             const a = document.createElement('a');
+                             a.href = res.url;
+                             a.download = `${job.taskType}-${safeName}.png`;
+                             document.body.appendChild(a);
+                             a.click();
+                             document.body.removeChild(a);
+                         }
+                     } else {
+                         // Default PNG
+                         const filename = `${job.taskType}-${safeName}.png`;
+                         const a = document.createElement('a');
+                         a.href = res.url;
+                         a.download = filename;
+                         document.body.appendChild(a);
+                         a.click();
+                         document.body.removeChild(a);
+                     }
+                 }
+
+                 setQueue(prev => prev.map(i => i.id === job.id ? { ...i, status: ProcessingStatus.SUCCESS, result: res } : i));
             }
         } catch (error: any) {
-             handleJobError(job, error.message || "Unknown error", error.message?.includes("Safety") || error.message?.includes("Prohibited"));
+            handleJobError(job, error.message || "Unknown error", error.message?.includes("Safety") || error.message?.includes("Prohibited"));
         }
     };
+
     const interval = setInterval(runProcessor, 1000);
     return () => clearInterval(interval);
-  }, [queue, queueControls, processingJobs, options, uploads, maxConcurrent]);
+  }, [queue, queueActive, uploads, maxConcurrent, options]);
 
-  const handleJobError = (job: QueueItem, message: string, isSafety: boolean) => {
-      // Adaptive Throttling for Overloaded errors
-      if (message.includes('503') || message.includes('Overloaded')) {
-          setMaxConcurrent(prev => {
-              const newVal = Math.max(3, prev - 1);
-              if (newVal !== prev) {
-                  addLog(LogLevel.WARN, `System overloaded. Reducing max concurrency to ${newVal}.`);
-              }
-              return newVal;
-          });
-      }
+  const handleJobError = (job: QueueItem, message: string, isProhibited: boolean) => {
+      // Calculate penalty
+      const penalty = isProhibited ? 10 : 5;
+      const newPriority = Math.max(1, job.priority - penalty);
+      
+      const newHistory = [...(job.errorHistory || []), message];
+      const isDead = newHistory.length >= 3;
+      
+      addLog(LogLevel.WARN, `Job ${job.taskType} failed. Penalty: -${penalty}. New Prio: ${newPriority}. ${isDead ? 'JOB DIED.' : 'Retrying...'}`);
 
-      addLog(LogLevel.WARN, `Job Failed: ${message}`);
-      setQueue(prev => prev.map(i => {
-          if (i.id !== job.id) return i;
-
-          const newHistory = [...(i.errorHistory || []), message];
-          const totalErrors = newHistory.length;
-          
-          // Logic: 
-          // 3 Total Errors -> ENDED
-          // Prohibited errors are treated as regular errors now (part of the 3 strike rule)
-          const isDead = totalErrors >= 3;
-
-          return {
-              ...i,
-              status: isDead ? ProcessingStatus.ENDED : ProcessingStatus.ERROR, 
-              errorMessage: message,
-              retryCount: i.retryCount + 1,
-              errorHistory: newHistory,
-              isBlocked: isSafety, 
-              isLastChance: isDead,
-              timestamp: Date.now()
-          };
-      }));
+      setQueue(prev => prev.map(i => i.id === job.id ? {
+          ...i,
+          status: isDead ? ProcessingStatus.ENDED : ProcessingStatus.ERROR,
+          errorMessage: message,
+          retryCount: i.retryCount + 1,
+          errorHistory: newHistory,
+          isBlocked: isProhibited,
+          priority: newPriority
+      } : i));
   };
 
   const handleScanning = async (job: QueueItem, apiKey: string, jobOptions: AppOptions) => {
-      addLog(LogLevel.INFO, `Scanning ${job.file.name}...`);
       let people = await detectPeople(job.file, apiKey, addLog, jobOptions.gender);
+      if (people.length === 0) people = []; // Normalized to empty array if no people found
       
-      if (people.length === 0) {
-          addLog(LogLevel.WARN, `Scan failed or no people found in ${job.file.name}. Defaulting to single subject.`);
-          people = [{ description: "Subject" }];
-      }
-
+      // Update Source with People Count
+      setUploads(prev => prev.map(u => u.id === job.sourceId ? { ...u, peopleCount: people.length } : u));
+      
       setQueue(prev => prev.map(i => i.id === job.id ? { ...i, status: ProcessingStatus.SUCCESS } : i));
 
       const newJobs: QueueItem[] = [];
-      const source = uploads.find(u => u.id === job.sourceId)!;
-      const create = (type: TaskType, description?: string, box?: number[]) => createJob(source, type, description, box);
+      const create = (type: TaskType, desc?: string, box?: number[]) => ({
+          id: crypto.randomUUID(), sourceId: job.sourceId, file: job.file, taskType: type,
+          personDescription: desc, detectBox: box, thumbnailUrl: job.thumbnailUrl,
+          status: ProcessingStatus.PENDING, timestamp: Date.now(), retryCount: 0,
+          maxRetries: 3, errorHistory: [], priority: 50
+      });
 
-      // Groups
+      // Default fallback subject if no people found but we need to run tasks (e.g. standard scene tasks)
+      const peopleList = people.length > 0 ? people : [{ description: "Subject" }];
+
       if (people.length > 1) {
           if (jobOptions.taskTypes['all-people']) newJobs.push(create('all-people'));
           if (jobOptions.taskTypes['all-people-nude']) newJobs.push(create('all-people-nude'));
       }
       
-      // Individuals
-      people.forEach(p => {
+      peopleList.forEach(p => {
           Object.keys(jobOptions.taskTypes).forEach(key => {
               const def = TASK_DEFINITIONS[key as TaskType];
+              // Only spawn person-specific tasks if actual people were found, OR if it's a generic "Subject" fallback for styles
               if (jobOptions.taskTypes[key] && def && (def.category === 'Person' || def.category === 'Style')) {
                    newJobs.push(create(key as TaskType, p.description, p.box_2d));
               }
           });
       });
+      // Scenes
+      if (jobOptions.taskTypes['full']) newJobs.push(create('full'));
+      if (jobOptions.taskTypes['full-nude']) newJobs.push(create('full-nude'));
+      if (jobOptions.taskTypes['background']) newJobs.push(create('background'));
 
-      if (newJobs.length > 0) {
-          addLog(LogLevel.INFO, `Spawned ${newJobs.length} tasks from scan.`);
-          setQueue(prev => [...prev, ...newJobs]);
+      if (newJobs.length > 0) setQueue(prev => [...prev, ...newJobs]);
+  };
+
+  const handleUpload = useCallback((files: FileList | null) => {
+    if (!files) return;
+    if (uploads.length >= HARD_LIMIT_UPLOADS) { alert(`Upload limit reached (${HARD_LIMIT_UPLOADS}).`); return; }
+    if (queue.length >= HARD_LIMIT_JOBS) { alert(`Job queue full (${HARD_LIMIT_JOBS}).`); return; }
+
+    const newUploads: SourceImage[] = [];
+    const newJobs: QueueItem[] = [];
+
+    Array.from(files).forEach(file => {
+        if (!file.type.startsWith('image/')) return;
+        const id = crypto.randomUUID();
+        const thumbnailUrl = URL.createObjectURL(file);
+        
+        // Capture snapshot of current options for this image
+        const snapshotOptions = JSON.parse(JSON.stringify(options));
+
+        newUploads.push({
+            id, file, thumbnailUrl, timestamp: Date.now(), 
+            options: snapshotOptions
+        });
+
+        // 1. Scanner Job (High Priority)
+        newJobs.push({
+            id: crypto.randomUUID(), sourceId: id, file, taskType: 'scan-people',
+            thumbnailUrl, status: ProcessingStatus.PENDING, timestamp: Date.now(),
+            retryCount: 0, maxRetries: 3, errorHistory: [], priority: 90 // High priority
+        });
+
+        // 2. Name Gen Job (VERY HIGH PRIORITY to ensure filename is ready for auto-downloads)
+        newJobs.push({
+             id: crypto.randomUUID(), sourceId: id, file, taskType: 'generate-name',
+             thumbnailUrl, status: ProcessingStatus.PENDING, timestamp: Date.now(),
+             retryCount: 0, maxRetries: 3, errorHistory: [], priority: 95 // Very High priority
+        });
+    });
+
+    setUploads(prev => [...newUploads, ...prev]);
+    setQueue(prev => [...prev, ...newJobs]);
+    addLog(LogLevel.INFO, `Added ${newUploads.length} images to workspace.`);
+  }, [options, uploads.length, queue.length, addLog]);
+
+  // Drag & Drop Handlers
+  const handleDragEnter = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragCounter(prev => prev + 1);
+    if (e.dataTransfer.items && e.dataTransfer.items.length > 0) {
+        setIsDraggingOver(true);
+    }
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragCounter(prev => {
+        const next = prev - 1;
+        if (next === 0) setIsDraggingOver(false);
+        return next;
+    });
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingOver(false);
+    setDragCounter(0);
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+        handleUpload(e.dataTransfer.files);
+    }
+  };
+
+  const selectKey = async () => {
+      if (window.aistudio?.openSelectKey) {
+          setIsKeyLoading(true);
+          try {
+             await window.aistudio.openSelectKey();
+          } finally {
+             setIsKeyLoading(false);
+          }
       }
   };
 
-  const handleGeneration = async (job: QueueItem, apiKey: string, jobOptions: AppOptions) => {
-      const res = await generateLineArtTask(job.file, apiKey, job.taskType, jobOptions, addLog, undefined, job.personDescription);
-      setQueue(prev => prev.map(i => i.id === job.id ? { ...i, status: ProcessingStatus.SUCCESS, result: res, timestamp: Date.now() } : i));
-      downloadImage(res.url, job.sourceId, job.taskType);
+  // Actions for Sidebar Items
+  const boostSource = (sourceId: string) => {
+      setQueue(prev => prev.map(job => 
+          job.sourceId === sourceId && job.status === ProcessingStatus.PENDING
+          ? { ...job, priority: job.priority + 10 }
+          : job
+      ));
+      addLog(LogLevel.INFO, "Boosted priority for pending jobs of source: " + sourceId);
   };
 
-  const handleExport = async () => {
-      setIsExporting(true);
-      await new Promise(resolve => setTimeout(resolve, 0));
-      try {
-        const exportData = { uploads: await Promise.all(uploads.map(async u => ({...u, data: await blobToBase64(u.file)}))), options };
-        const blob = new Blob([JSON.stringify(exportData)], {type: 'application/json'});
-        const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'lineartify_backup.json'; a.click();
-      } catch(e) { addLog(LogLevel.ERROR, "Export failed", e); } 
-      finally { setIsExporting(false); }
+  const retrySource = (sourceId: string) => {
+      setQueue(prev => prev.map(job => 
+          job.sourceId === sourceId && (job.status === ProcessingStatus.ERROR || job.status === ProcessingStatus.ENDED)
+          ? { ...job, status: ProcessingStatus.PENDING, retryCount: 0, priority: 60 } // Retry with slightly higher priority
+          : job
+      ));
+      addLog(LogLevel.INFO, "Retrying failed jobs for source: " + sourceId);
   };
+
+  const deleteSource = (sourceId: string) => {
+      // Directly delete without confirmation as requested
+      // 1. Remove from Queue first to prevent any processing
+      setQueue(prev => prev.filter(j => j.sourceId !== sourceId));
+      // 2. Remove from Uploads
+      setUploads(prev => prev.filter(u => u.id !== sourceId));
+      // 3. Clear selection if needed
+      if(selectedSourceId === sourceId) setSelectedSourceId(null);
+      addLog(LogLevel.INFO, "Deleted source " + sourceId + " and all related jobs.");
+  };
+
+  // Derived UI Data & Filters
   
-  const handleImport = (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0];
-      if(!file) return;
-      setIsImporting(true);
-      const reader = new FileReader();
-      reader.onload = async (ev) => {
-          try {
-              const data = JSON.parse(ev.target?.result as string);
-              if (data.options) setOptions(prev => ({...prev, ...data.options, taskPriorities: {...prev.taskPriorities, ...(data.options.taskPriorities||{})}, taskTypes: {...prev.taskTypes, ...(data.options.taskTypes||{})}}));
-              if (data.uploads) {
-                  const newUploads = await Promise.all(data.uploads.map(async (u: any) => {
-                      const res = await fetch(u.data); const blob = await res.blob(); const file = new File([blob], u.file.name, { type: u.file.type });
-                      return { ...u, file, thumbnailUrl: URL.createObjectURL(file), options: u.options || options, priorityCount: u.priorityCount || 0 };
-                  }));
-                  const unique = newUploads.filter(nu => !uploads.some(u => u.file.name === nu.file.name));
-                  setUploads(prev => [...prev, ...unique]); populateQueues(unique);
-              }
-          } catch(err) { console.error(err); } finally { setIsImporting(false); if (fileInputRef.current) fileInputRef.current.value = ''; }
-      };
-      reader.readAsText(file);
-  };
-  
-  const handleApiKeyChange = async () => { 
-      setIsKeyLoading(true);
-      try { if ((window as any).aistudio?.openSelectKey) await (window as any).aistudio.openSelectKey(); } finally { setIsKeyLoading(false); }
-  };
+  // Counts for Buttons
+  const failedJobsCount = queue.filter(j => j.status === ProcessingStatus.ERROR && !ANALYZING_TYPES.includes(j.taskType)).length;
+  const deadJobsCount = queue.filter(j => j.status === ProcessingStatus.ENDED && !ANALYZING_TYPES.includes(j.taskType)).length;
+  const waitingJobsCount = queue.filter(j => j.status === ProcessingStatus.PENDING && !ANALYZING_TYPES.includes(j.taskType)).length;
+  const finishedJobsCount = queue.filter(j => j.status === ProcessingStatus.SUCCESS && !ANALYZING_TYPES.includes(j.taskType)).length;
+  const prunableUploadsCount = (() => {
+      const activeSourceIds = new Set(queue.filter(j => j.status === ProcessingStatus.PENDING || j.status === ProcessingStatus.PROCESSING).map(j => j.sourceId));
+      return uploads.filter(u => !activeSourceIds.has(u.id)).length;
+  })();
 
-  const getProcessingJobsForSource = (sourceId: string) => queue.filter(j => j.sourceId === sourceId && j.status === ProcessingStatus.PROCESSING);
+  // Filter Logic
+  const baseFilteredQueue = queue.filter(item => {
+      // Background jobs should not be visible in gallery
+      if (ANALYZING_TYPES.includes(item.taskType)) return false;
 
-  const getUploadBorderClass = (uploadId: string) => {
-      const jobs = queue.filter(j => j.sourceId === uploadId);
-      if (jobs.length === 0) return 'border-white/5';
-
-      // 1. Blue: Active job running
-      if (jobs.some(j => j.status === ProcessingStatus.PROCESSING)) return 'border-blue-500 border-4';
+      // HIDE PENDING JOBS FROM GALLERY (Running & Finished Only)
+      // UNLESS the user is explicitly looking at the 'Pending' queue or a category queue that includes them.
+      const isExplicitPendingView = activeQueueTab === 'Pending' || activeQueueTab === item.taskType || TASK_DEFINITIONS[item.taskType]?.label === activeQueueTab;
       
-      // 2. Yellow: Scan needed (Scan pending)
-      const scanJob = jobs.find(j => j.taskType === 'scan-people');
-      if (scanJob && scanJob.status === ProcessingStatus.PENDING) return 'border-yellow-500 border-4';
+      if (item.status === ProcessingStatus.PENDING && !isExplicitPendingView) return false;
 
-      // 3. Red: Jobs have died (Ended)
-      if (jobs.some(j => j.status === ProcessingStatus.ENDED)) return 'border-red-500 border-4';
-
-      // 4. Orange: Jobs have failed (Error)
-      if (jobs.some(j => j.status === ProcessingStatus.ERROR)) return 'border-orange-500 border-4';
-
-      // 5. Green: All jobs finished (Success)
-      const allDone = jobs.length > 0 && jobs.every(j => j.status === ProcessingStatus.SUCCESS);
-      if (allDone) return 'border-emerald-500 border-4';
-
-      // Default
-      return 'border-white/5';
-  };
-
-  // Sort uploads by Priority first, then Name
-  const sortedUploads = [...uploads].sort((a, b) => {
-      const pA = a.priorityCount || 0;
-      const pB = b.priorityCount || 0;
-      if (pA !== pB) return pB - pA; // Higher priority first
-      return a.file.name.localeCompare(b.file.name);
+      if (activeQueueTab === 'Failed') return item.status === ProcessingStatus.ERROR;
+      if (activeQueueTab === 'Dead') return item.status === ProcessingStatus.ENDED;
+      if (activeQueueTab === 'Pending') return item.status === ProcessingStatus.PENDING;
+      if (activeQueueTab === 'UPLOADS') return true; 
+      if (activeQueueTab === 'JOBS') return item.status === ProcessingStatus.PROCESSING || item.status === ProcessingStatus.PENDING;
+      
+      const def = TASK_DEFINITIONS[item.taskType];
+      if (def && def.label === activeQueueTab) return true;
+      if (item.taskType === activeQueueTab) return true;
+      return false;
   });
 
-  const queueViews: { id: QueueViewGroup, label: string, icon: any, description: string }[] = [
-    { id: 'UPLOADS', label: 'Uploads', icon: Upload, description: "Manage source images" },
-    { id: 'JOBS', label: 'Jobs', icon: RefreshCw, description: "Running tasks" },
-    { id: 'SCENES', label: 'Scenes', icon: Mountain, description: "Full scenes and backgrounds" },
-    { id: 'GROUPS', label: 'Groups', icon: Users, description: "Multi-person extraction" },
-    { id: 'CHARACTERS', label: 'Characters', icon: User, description: "Full body character studies" },
-    { id: 'PORTRAITS', label: 'Portraits', icon: Smile, description: "Face close-ups" },
-    
-    // Updated Consolidated Styles
-    { id: 'STYLES_WESTERN', label: 'Western', icon: Star, description: "US/Euro Comics & Cartoons" },
-    { id: 'STYLES_EASTERN', label: 'Eastern', icon: Scroll, description: "Anime & Manga" },
-    { id: 'STYLES_FANTASY', label: 'Fantasy', icon: Sword, description: "Fantasy & Sci-Fi Artists" },
-    { id: 'STYLES_ARTISTIC', label: 'Artistic', icon: Palette, description: "Movements & Techniques" },
-    { id: 'STYLES_SPECIAL', label: 'Special', icon: Zap, description: "Tech, Horror, & Misc" },
+  // Section 1: Top (Selected Source Results) - NOW INCLUDES ALL RELEVANT JOBS FOR SOURCE
+  const selectedSourceJobs = selectedSourceId 
+      ? queue.filter(j => j.sourceId === selectedSourceId && !ANALYZING_TYPES.includes(j.taskType))
+             .sort((a, b) => {
+                 // Sort priority: Success > Processing > Failed > Pending
+                 const getScore = (s: ProcessingStatus) => {
+                     if (s === ProcessingStatus.SUCCESS) return 4;
+                     if (s === ProcessingStatus.PROCESSING) return 3;
+                     if (s === ProcessingStatus.ERROR) return 2;
+                     return 1;
+                 }
+                 return getScore(b.status) - getScore(a.status) || b.timestamp - a.timestamp;
+             })
+      : [];
 
-    { id: 'UTILITY', label: 'Utility', icon: Layers, description: "Scanning and Upscaling" },
-    { id: 'ISSUES', label: 'Issues', icon: AlertTriangle, description: "Failed and Dead jobs" }
-  ];
+  // Section 2: Middle (Running/Processing) - Exclude selected source to avoid duplicates
+  const runningJobs = baseFilteredQueue.filter(j => 
+      j.status === ProcessingStatus.PROCESSING &&
+      (selectedSourceId ? j.sourceId !== selectedSourceId : true)
+  );
+  
+  // Section 3: Bottom (Finished History - Exclude selected if shown above)
+  const finishedJobs = baseFilteredQueue.filter(j => 
+      j.status === ProcessingStatus.SUCCESS && 
+      (selectedSourceId ? j.sourceId !== selectedSourceId : true)
+  );
+  
+  // Also show Pending/Failed/Dead if explicitly selected in tab - Exclude selected source
+  const explicitOtherJobs = baseFilteredQueue.filter(j => 
+      (j.status === ProcessingStatus.PENDING || j.status === ProcessingStatus.ERROR || j.status === ProcessingStatus.ENDED) &&
+      (activeQueueTab !== 'UPLOADS' && activeQueueTab !== 'JOBS') &&
+      (selectedSourceId ? j.sourceId !== selectedSourceId : true)
+  );
+
+  // Calculate Progress
+  const activeJobs = queue.filter(j => j.status === ProcessingStatus.PENDING || j.status === ProcessingStatus.PROCESSING).length;
+  const progress = queue.length > 0 ? ((queue.filter(j => j.status === ProcessingStatus.SUCCESS || j.status === ProcessingStatus.ENDED).length) / queue.length) * 100 : 0;
+  
+  const categories = getQueueTypes(queue);
+  
+  // Unified List of Queues for Sidebar
+  const allQueues = [
+      { id: 'Pending', label: 'Uploads (Waiting)', count: waitingJobsCount, color: 'text-indigo-400', border: 'border-indigo-500' },
+      { id: 'Failed', label: 'Failed Jobs', count: failedJobsCount, color: 'text-red-400', border: 'border-red-500' },
+      { id: 'Dead', label: 'Dead Jobs', count: deadJobsCount, color: 'text-slate-500', border: 'border-slate-500' },
+      ...categories.map(cat => ({
+          id: cat,
+          label: cat,
+          count: queue.filter(j => TASK_DEFINITIONS[j.taskType]?.label === cat || j.taskType === cat).length,
+          color: 'text-purple-400',
+          border: 'border-purple-500'
+      }))
+  ].filter(q => q.count > 0);
+
+  // Viewer Navigation Logic
+  const displayedViewerList = [...selectedSourceJobs, ...runningJobs, ...finishedJobs, ...explicitOtherJobs];
+  const currentIndex = viewerItemId ? displayedViewerList.findIndex(i => i.id === viewerItemId) : -1;
+  const hasNext = currentIndex < displayedViewerList.length - 1;
+  const hasPrev = currentIndex > 0;
+
+  // Filter uploads based on "No People" checkbox
+  const displayedUploads = uploads.filter(u => {
+      if (filterNoPeople) return u.peopleCount === 0;
+      return true;
+  });
 
   return (
-    <div className="flex flex-col h-screen w-screen bg-[#13111c] text-slate-200 font-sans overflow-hidden relative" onDragOver={e => {e.preventDefault(); setIsDragging(true)}} onDragLeave={e => {e.preventDefault(); if (!e.currentTarget.contains(e.relatedTarget as Node)) setIsDragging(false)}} onDrop={e => {e.preventDefault(); setIsDragging(false); handleUpload(e.dataTransfer.files)}}>
-      {isDragging && <div className="absolute inset-0 z-[100] bg-purple-500/20 backdrop-blur-sm border-4 border-purple-500 border-dashed flex items-center justify-center pointer-events-none"><div className="text-4xl font-bold text-white drop-shadow-lg">Drop images to upload</div></div>}
-
-      <header className="flex-none h-14 bg-[#1a1625] border-b border-white/5 flex items-center justify-between px-4 z-50">
-        <div className="flex items-center space-x-4">
-            <div className="flex items-center space-x-2"><div className="w-8 h-8 bg-purple-600 rounded flex items-center justify-center"><ImageIcon className="text-white w-5 h-5" /></div><h1 className="font-bold text-lg tracking-tight">LineArtify</h1></div>
-            <div className="flex flex-col justify-center ml-4">
-                {totalJobs > 0 && (<div className="flex items-center space-x-3 bg-slate-800/50 px-3 py-1.5 rounded-full border border-white/5 mb-0.5"><div className="w-32 h-2 bg-slate-700 rounded-full overflow-hidden"><div className="h-full bg-emerald-500 transition-all duration-500 ease-out" style={{ width: `${progressPercent}%` }}></div></div><span className="text-xs font-mono text-slate-400">{completedJobs} / {totalJobs} jobs</span></div>)}
-                <div className="text-[10px] text-purple-300 font-mono h-3 overflow-hidden whitespace-nowrap text-ellipsis max-w-[300px] animate-pulse">
-                    {statusMessage}
-                </div>
-            </div>
+    <div 
+        className="flex h-screen bg-[#0f0f16] text-white font-sans overflow-hidden select-none"
+        onDragEnter={handleDragEnter}
+        onDragLeave={handleDragLeave}
+        onDragOver={handleDragOver}
+        onDrop={handleDrop}
+    >
+      
+      {/* Drag Overlay */}
+      {isDraggingOver && (
+        <div className="fixed inset-0 z-[100] bg-indigo-900/90 backdrop-blur-md flex flex-col items-center justify-center animate-in fade-in duration-200 pointer-events-none">
+             <div className="bg-white/10 p-12 rounded-full mb-8 border-4 border-white/20 shadow-2xl shadow-indigo-500/50">
+                <Upload className="w-32 h-32 text-white animate-bounce" />
+             </div>
+             <h2 className="text-5xl font-bold text-white tracking-tight drop-shadow-xl">Drop Images Here</h2>
+             <p className="text-indigo-200 mt-4 text-xl font-medium tracking-wide">to add them to the workspace</p>
         </div>
-        <div className="flex items-center space-x-2">
-            <div className="flex items-center space-x-2 text-xs font-mono text-slate-400 bg-slate-800 rounded border border-white/5 px-2 py-1 mr-2" title="Max concurrent jobs">
-                <span>Max Jobs:</span>
-                <input type="number" min="1" max="10" value={maxConcurrent} onChange={(e) => setMaxConcurrent(Math.max(1, Math.min(10, parseInt(e.target.value) || 5)))} className="w-8 bg-transparent text-center text-white outline-none font-bold appearance-none" style={{MozAppearance: 'textfield'}} />
-            </div>
+      )}
 
-            <div className="bg-slate-800 rounded flex items-center border border-white/5 mr-2">
-                <button onClick={() => setThumbnailSize('small')} className={`p-1.5 rounded-l ${thumbnailSize === 'small' ? 'bg-purple-600' : 'text-slate-400 hover:text-white'}`} title="Small Thumbnails"><Grip size={14} /></button>
-                <div className="w-px h-4 bg-white/10"></div>
-                <button onClick={() => setThumbnailSize('medium')} className={`p-1.5 ${thumbnailSize === 'medium' ? 'bg-purple-600' : 'text-slate-400 hover:text-white'}`} title="Medium Thumbnails"><Grip size={16} /></button>
-                <div className="w-px h-4 bg-white/10"></div>
-                <button onClick={() => setThumbnailSize('large')} className={`p-1.5 rounded-r ${thumbnailSize === 'large' ? 'bg-purple-600' : 'text-slate-400 hover:text-white'}`} title="Large Thumbnails"><Monitor size={16} /></button>
-            </div>
-            <button onClick={() => setIsOptionsOpen(true)} className="flex items-center space-x-2 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 rounded text-sm transition-colors border border-white/5" title="Configuration"><Settings size={16} /> <span>Options</span></button>
-            <div className="w-px h-6 bg-white/10 mx-1"></div>
-            <button onClick={() => setQueueControls(p => ({...p, GLOBAL: !p.GLOBAL}))} className={`flex items-center space-x-2 px-4 py-1.5 rounded text-sm font-bold transition-all ${queueControls.GLOBAL ? 'bg-red-500/20 text-red-400 border border-red-500/30' : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'}`} title={queueControls.GLOBAL ? "Stop Processing" : "Start Processing"}>
-                {queueControls.GLOBAL ? <><Pause size={16} fill="currentColor" /><span>Stop</span></> : <><Play size={16} fill="currentColor" /><span>Start</span></>}
-            </button>
-            <div className="w-px h-6 bg-white/10 mx-1"></div>
-            <button onClick={handleExport} disabled={isExporting} className="p-2 hover:bg-white/10 rounded text-slate-400 disabled:opacity-50" title="Backup Workspace"><Save size={18} /></button>
-            <button onClick={() => !isImporting && fileInputRef.current?.click()} disabled={isImporting} className="p-2 hover:bg-white/10 rounded text-slate-400 disabled:opacity-50" title="Restore Workspace"><FolderOpen size={18} /></button>
-            <input type="file" ref={fileInputRef} hidden accept=".json" onChange={handleImport} />
-            <div className="w-px h-6 bg-white/10 mx-1"></div>
-            <button onClick={() => setIsManualOpen(true)} className="p-2 hover:bg-white/10 rounded text-slate-400" title="User Manual"><Book size={18} /></button>
-            <button onClick={() => setIsConsoleOpen(true)} className="p-2 hover:bg-white/10 rounded text-slate-400" title="System Logs"><Terminal size={18} /></button>
-            <button onClick={handleApiKeyChange} disabled={isKeyLoading} className="p-2 hover:bg-white/10 rounded text-slate-400 disabled:opacity-50" title="API Key Config"><Key size={18} /></button>
+      {/* --- SIDEBAR --- */}
+      <aside 
+        style={{ width: `${sidebarWidth}%` }} 
+        className="flex flex-col h-full border-r border-white/5 bg-[#13111c] relative shrink-0 z-20 shadow-2xl"
+        ref={sidebarRef}
+      >
+        {/* Sidebar Header - FIXED */}
+        <div className="p-4 border-b border-white/5 bg-[#13111c] shrink-0 space-y-3 z-20">
+             <div className="flex items-center justify-between mb-2">
+                 <h1 className="font-bold text-lg tracking-tight bg-gradient-to-r from-indigo-400 to-purple-400 bg-clip-text text-transparent">LineArtify</h1>
+                 <span className="text-[10px] font-mono text-slate-500 bg-black/40 px-1.5 py-0.5 rounded border border-white/5">v4.5</span>
+             </div>
+             
+             {/* View Toggle */}
+             <div className="flex bg-black/40 p-1 rounded-lg border border-white/5">
+                 <button onClick={() => setSidebarView('SOURCES')} className={`flex-1 py-1.5 rounded text-xs font-bold transition-all ${sidebarView === 'SOURCES' ? 'bg-indigo-600 text-white shadow' : 'text-slate-400 hover:text-white'}`}><Grid size={14} className="inline mr-1" /> Sources</button>
+                 <button onClick={() => setSidebarView('QUEUES')} className={`flex-1 py-1.5 rounded text-xs font-bold transition-all ${sidebarView === 'QUEUES' ? 'bg-indigo-600 text-white shadow' : 'text-slate-400 hover:text-white'}`}><List size={14} className="inline mr-1" /> Queues</button>
+             </div>
+
+             {sidebarView === 'SOURCES' && (
+                <>
+                    <button 
+                        onClick={() => fileInputRef.current?.click()}
+                        className="w-full py-2.5 bg-slate-800 hover:bg-indigo-600 text-white rounded-lg font-bold flex items-center justify-center gap-2 transition-all shadow border border-white/5 group text-xs"
+                    >
+                        <Upload size={16} className="group-hover:animate-bounce" /> <span>Upload Images</span>
+                    </button>
+                    <input type="file" multiple ref={fileInputRef} className="hidden" accept="image/*" onChange={(e) => handleUpload(e.target.files)} />
+
+                    <div className="flex flex-col gap-2 px-1">
+                        <div className="flex items-center justify-between text-xs text-slate-500 font-mono">
+                            <span>{displayedUploads.length} Sources</span>
+                            <button onClick={() => { if(confirm('Clear all data?')) { clearWorkspace(); window.location.reload(); }}} className="hover:text-red-400 flex items-center gap-1"><Trash2 size={12}/> Clear All</button>
+                        </div>
+                        {/* No People Filter */}
+                        <label className="flex items-center gap-2 text-xs text-slate-400 cursor-pointer hover:text-slate-200 transition-colors">
+                            <input 
+                                type="checkbox" 
+                                checked={filterNoPeople} 
+                                onChange={(e) => setFilterNoPeople(e.target.checked)}
+                                className="rounded border-white/10 bg-black/40 text-indigo-500 focus:ring-0 w-3.5 h-3.5 cursor-pointer"
+                            />
+                            <span>Show empty scans only (0 people)</span>
+                        </label>
+                    </div>
+                </>
+             )}
         </div>
-      </header>
-
-      <div className="w-full bg-[#201c2e] border-b border-white/5 flex items-center px-2 py-2 overflow-x-auto space-x-1 scrollbar-hide flex-none z-40 relative">
-        {queueViews.map((view) => (
-            <button key={view.id} onClick={() => setActiveQueueView(view.id)} onMouseEnter={(e) => setHoveredButton({id: view.id, rect: e.currentTarget.getBoundingClientRect()})} onMouseLeave={() => setHoveredButton(null)} className={`flex-none min-w-[3.5rem] px-2 h-9 flex items-center justify-center rounded-lg transition-all border relative ${activeQueueView === view.id ? 'bg-purple-600 border-purple-500 text-white shadow-lg' : 'bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700 hover:text-slate-200'}`}>
-                <view.icon size={18} className="shrink-0" /><span className="ml-2 text-[10px] font-bold font-mono">{getQueueStats(view.id)}</span>
-            </button>
-        ))}
-        {hoveredButton && <div className="fixed z-[60] bg-slate-900 border border-slate-600 text-white p-3 rounded-lg shadow-2xl pointer-events-none w-64" style={{ top: hoveredButton.rect.bottom + 10, left: Math.min(hoveredButton.rect.left, window.innerWidth - 270) }}><div className="font-bold text-sm text-purple-400 mb-1">{queueViews.find(q => q.id === hoveredButton.id)?.label}</div><div className="text-xs text-slate-300">{queueViews.find(q => q.id === hoveredButton.id)?.description}</div></div>}
-      </div>
-
-      <div className="flex-1 flex overflow-hidden relative">
-        <div className="flex flex-col bg-[#16141f] border-r border-white/5 relative z-10 transition-all duration-75 group/sidebar" style={{ width: `${sidebarWidth}vw` }}>
-            <div className="border-b border-white/5 bg-slate-800/30 sticky top-0 z-30 backdrop-blur">
-                <div className="p-3 flex items-center justify-between">
-                    <h2 className="font-bold text-sm text-purple-400 uppercase tracking-wider truncate" title={queueViews.find(q => q.id === activeQueueView)?.label}>{queueViews.find(q => q.id === activeQueueView)?.label}</h2>
-                    <div className="flex items-center space-x-1">
-                        <button onClick={scrollToSidebarTop} className="p-1.5 hover:bg-slate-700 text-slate-500 hover:text-purple-400 rounded transition-colors" title="Top"><ArrowUp size={14} /></button>
-                        <button onClick={scrollToSidebarBottom} className="p-1.5 hover:bg-slate-700 text-slate-500 hover:text-purple-400 rounded transition-colors" title="Bottom"><ArrowDown size={14} /></button>
-                        {(activeQueueView !== 'UPLOADS' && activeQueueView !== 'ISSUES') && (
-                            <button onClick={() => handleDeleteAllInQueue(activeQueueView)} className="p-1.5 hover:bg-red-500/20 text-slate-500 hover:text-red-400 rounded transition-colors" title="Delete All"><Trash2 size={16} /></button>
-                        )}
-                    </div>
+        
+        {/* Fixed Actions Panel for Queues */}
+        {sidebarView === 'QUEUES' && (
+            <div className="shrink-0 p-3 border-b border-white/5 bg-[#181825] space-y-2 shadow-lg z-10">
+                <div className="text-[10px] font-bold text-indigo-300 uppercase tracking-wider mb-2">Bulk Actions</div>
+                <div className="grid grid-cols-2 gap-2">
+                     <button onClick={boostAllWaiting} className="flex items-center gap-1 p-2 bg-slate-800 hover:bg-indigo-600 rounded text-[9px] font-bold text-slate-300 hover:text-white transition-colors border border-white/5">
+                         <Zap size={12} className="shrink-0" /> Boost Wait ({waitingJobsCount})
+                     </button>
+                     <button onClick={retryAllFailed} className="flex items-center gap-1 p-2 bg-slate-800 hover:bg-emerald-600 rounded text-[9px] font-bold text-slate-300 hover:text-white transition-colors border border-white/5">
+                         <RefreshCw size={12} className="shrink-0" /> Retry Failed ({failedJobsCount})
+                     </button>
+                     <button onClick={deleteAllFailed} className="flex items-center gap-1 p-2 bg-slate-800 hover:bg-amber-600 rounded text-[9px] font-bold text-slate-300 hover:text-white transition-colors border border-white/5">
+                         <AlertTriangle size={12} className="shrink-0" /> Del Failed ({failedJobsCount})
+                     </button>
+                     <button onClick={deleteAllDead} className="flex items-center gap-1 p-2 bg-slate-800 hover:bg-red-600 rounded text-[9px] font-bold text-slate-300 hover:text-white transition-colors border border-white/5">
+                         <Trash2 size={12} className="shrink-0" /> Del Dead ({deadJobsCount})
+                     </button>
+                     <button onClick={clearGallery} className="flex items-center gap-1 p-2 bg-slate-800 hover:bg-slate-600 rounded text-[9px] font-bold text-slate-300 hover:text-white transition-colors border border-white/5">
+                         <Eraser size={12} className="shrink-0" /> Clear Display ({finishedJobsCount})
+                     </button>
+                     <button onClick={pruneUploads} className="flex items-center gap-1 p-2 bg-slate-800 hover:bg-slate-600 rounded text-[9px] font-bold text-slate-300 hover:text-white transition-colors border border-white/5">
+                         <Scissors size={12} className="shrink-0" /> Prune Uploads ({prunableUploadsCount})
+                     </button>
                 </div>
-
-                {/* Sidebar Resizer (Slider) */}
-                <div className="px-3 pb-2">
-                   <div className="flex items-center space-x-2">
-                       <input 
-                           type="range" 
-                           min="10" 
-                           max="50" 
-                           value={sidebarWidth} 
-                           onChange={(e) => setSidebarWidth(Number(e.target.value))} 
-                           className="w-full h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-purple-500 opacity-30 hover:opacity-100 transition-opacity" 
-                           title="Sidebar Width"
-                       />
-                   </div>
-                </div>
-
-                {activeQueueView === 'UPLOADS' && (
-                    <div className="px-3 pb-3 flex gap-2">
-                        <button onClick={handleRetryAllIssues} className="flex-1 flex items-center justify-center space-x-2 px-2 py-1.5 bg-orange-500/10 hover:bg-orange-500/20 text-orange-300 rounded text-xs transition-colors border border-orange-500/20 font-bold" title="Retry all Failed Jobs">
-                            <RefreshCw size={12} /> <span className="truncate">Retry all issues</span>
-                        </button>
-                        <button onClick={handleDeleteFinishedSources} className="flex-1 flex items-center justify-center space-x-2 px-2 py-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-300 rounded text-xs transition-colors border border-red-500/20 font-bold" title="Delete finished">
-                            <Trash2 size={12} /> <span className="truncate">Delete finished</span>
-                        </button>
-                    </div>
-                )}
             </div>
-            
-            <div className="p-3 border-b border-white/5">
-                {activeQueueView === 'UPLOADS' && (
-                    <div className="flex flex-col gap-2 w-full">
-                        <div className="w-full flex items-center justify-center p-4 border-2 border-dashed border-white/10 rounded bg-white/5 hover:bg-white/10 cursor-pointer relative transition-colors"><input type="file" multiple accept="image/*" className="absolute inset-0 opacity-0 cursor-pointer" onChange={(e) => handleUpload(e.target.files)} /><div className="flex items-center space-x-2 text-sm text-slate-400 font-medium"><Upload size={16} /> <span>Add Images</span></div></div>
-                    </div>
-                )}
-                {GROUP_MAPPING[activeQueueView] && (
-                    <div className="w-full flex items-center justify-between bg-slate-800/50 p-2 rounded">
-                         <span className="text-xs font-mono uppercase text-slate-400">Group Active</span>
-                         <button onClick={() => setQueueControls(p => ({...p, [activeQueueView]: !p[activeQueueView]}))} className={`w-10 h-5 rounded-full relative transition-colors ${queueControls[activeQueueView] ? 'bg-emerald-500' : 'bg-slate-600'}`}><div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full transition-transform ${queueControls[activeQueueView] ? 'translate-x-5.5 left-0.5' : 'translate-x-0.5 left-0.5'}`}></div></button>
-                    </div>
-                )}
-            </div>
+        )}
 
-            <div ref={sidebarRef} className="flex-1 overflow-y-auto p-3 space-y-3 scrollbar-hide">
-                {activeQueueView === 'UPLOADS' && sortedUploads.filter(u => !showFinishedUploads).map(upload => {
-                    const sourceJobs = queue.filter(j => j.sourceId === upload.id);
-                    const isScanning = getProcessingJobsForSource(upload.id).some(j => j.taskType === 'scan-people');
-                    const isNaming = getProcessingJobsForSource(upload.id).some(j => j.taskType === 'generate-name');
-                    const borderColorClass = getUploadBorderClass(upload.id);
-                    const hasErrorJobs = sourceJobs.some(j => j.status === ProcessingStatus.ERROR);
-                    const hasDeadJobs = sourceJobs.some(j => j.status === ProcessingStatus.ENDED);
-                    
-                    const prohibitedCount = sourceJobs.filter(j => j.isBlocked).length;
+        {/* Sidebar List - SCROLLABLE */}
+        <div className="flex-1 overflow-y-auto bg-[#181825] custom-scrollbar">
+            {sidebarView === 'SOURCES' ? (
+                // --- SOURCES VIEW ---
+                <>
+                    {displayedUploads.map(u => {
+                        const isActive = selectedSourceId === u.id;
+                        const isScanning = queue.some(j => j.sourceId === u.id && j.taskType === 'scan-people' && j.status === ProcessingStatus.PROCESSING);
+                        const isAnalysingName = queue.some(j => j.sourceId === u.id && j.taskType === 'generate-name' && j.status === ProcessingStatus.PROCESSING);
+                        
+                        // Counts for specific statuses
+                        const sourceJobs = queue.filter(j => j.sourceId === u.id && !ANALYZING_TYPES.includes(j.taskType));
+                        const finishedCount = sourceJobs.filter(j => j.status === ProcessingStatus.SUCCESS).length;
+                        const prohibitedCount = sourceJobs.filter(j => j.isBlocked).length;
+                        const failedCount = sourceJobs.filter(j => (j.status === ProcessingStatus.ERROR || j.status === ProcessingStatus.ENDED) && !j.isBlocked).length;
+                        const totalCount = sourceJobs.length;
+                        const activeCount = Math.max(0, totalCount - finishedCount - prohibitedCount - failedCount);
+                        
+                        const alertLevel = getAlertLevel(sourceJobs);
+                        const displayFailedCount = failedCount + prohibitedCount; // For label purposes, show total bad jobs
 
-                    const totalSourceJobs = sourceJobs.length;
-                    const settledSourceJobs = sourceJobs.filter(j => 
-                        j.status === ProcessingStatus.SUCCESS || 
-                        j.status === ProcessingStatus.ENDED || 
-                        (j.status === ProcessingStatus.ERROR && (j.isBlocked || j.retryCount >= 3))
-                    ).length;
-                    const failedSourceJobs = sourceJobs.filter(j => j.status === ProcessingStatus.ERROR || j.status === ProcessingStatus.ENDED).length;
-                    
-                    const isSelected = selectedSourceId === upload.id;
-                    const errorMessages = sourceJobs.filter(j => j.errorMessage).map(j => `${j.taskType}: ${j.errorMessage}`);
-
-                    const activeStates = [ProcessingStatus.PENDING, ProcessingStatus.PROCESSING];
-                    const isBusy = sourceJobs.some(j => activeStates.includes(j.status));
-                    const hasPendingJobs = sourceJobs.some(j => j.status === ProcessingStatus.PENDING);
-                    const deleteBtnClass = isBusy 
-                        ? "bg-red-600 hover:bg-red-500 text-white" 
-                        : "bg-emerald-600 hover:bg-emerald-500 text-white";
-
-                    return (
-                    <div key={upload.id} className={`bg-slate-800 rounded-lg overflow-hidden border relative group flex flex-col cursor-pointer transition-all ${isSelected ? 'ring-2 ring-purple-500 z-10 scale-[1.02]' : ''} ${borderColorClass}`} onClick={() => setSelectedSourceId(prev => prev === upload.id ? null : upload.id)}>
-                        <div className="relative">
-                            <img src={upload.thumbnailUrl} className="w-full h-auto max-h-[50vh] object-cover opacity-70 group-hover:opacity-100" />
-                            <div className="absolute top-2 left-2 z-20"><div className={`p-1 rounded bg-black/50 backdrop-blur ${isSelected ? 'text-emerald-400' : 'text-slate-400'}`}>{isSelected ? <CheckSquare size={20} /> : <Square size={20} />}</div></div>
-                            
-                            {/* Priority Badge */}
-                            {(upload.priorityCount || 0) > 0 && (
-                                <div className="absolute top-2 left-8 z-30 animate-in zoom-in">
-                                    <div className="bg-amber-500 text-black text-[10px] font-bold px-1.5 py-0.5 rounded shadow-lg border border-amber-400 flex items-center gap-0.5" title="Times Prioritized">
-                                       <ChevronsUp size={10} strokeWidth={3} /> {upload.priorityCount}
-                                    </div>
-                                </div>
-                            )}
-
-                            {totalSourceJobs > 0 && (
-                                <div className="absolute top-2 right-2 flex flex-col items-end gap-1 z-20">
-                                    <div className="bg-black/60 backdrop-blur text-white text-[10px] px-2 py-1 rounded-full font-mono font-bold border border-white/10 shadow-lg">
-                                        {settledSourceJobs} / {totalSourceJobs} jobs
-                                    </div>
-                                    {failedSourceJobs > 0 && (
-                                        <div className="bg-red-500/90 text-white text-[10px] px-2 py-1 rounded-full font-bold shadow-lg animate-pulse">
-                                            {failedSourceJobs} failed
+                        return (
+                            <div 
+                                key={u.id}
+                                className={`w-full group relative border-b transition-all ${isActive ? 'bg-indigo-900/20 border-indigo-500/30 ring-2 ring-indigo-500 z-10' : 'bg-[#181825] border-white/5'}`}
+                            >
+                                <div className="relative aspect-video w-full bg-black/40 overflow-hidden">
+                                    <img src={u.thumbnailUrl} className={`w-full h-full object-cover transition-transform duration-500 group-hover:scale-110 ${isScanning ? 'opacity-50 blur-sm' : 'opacity-80 group-hover:opacity-40'}`} />
+                                    
+                                    {/* Scanning Overlay */}
+                                    {(isScanning || isAnalysingName) && (
+                                        <div className="absolute inset-0 bg-indigo-500/10 flex items-center justify-center z-10 pointer-events-none">
+                                            <div className="w-full h-0.5 bg-indigo-400 absolute animate-scan shadow-[0_0_10px_#818cf8]"></div>
+                                            <span className="text-[10px] font-mono text-indigo-300 bg-black/80 px-2 py-1 rounded backdrop-blur border border-indigo-500/30">
+                                                {isScanning ? 'SCANNING' : 'ANALYZING'}
+                                            </span>
                                         </div>
                                     )}
-                                </div>
-                            )}
-                            {/* Prohibited Badge */}
-                            {prohibitedCount > 0 && (
-                                <div className="absolute top-10 right-2 z-20 animate-in fade-in slide-in-from-right-2">
-                                     <span className="flex items-center gap-1 px-2 py-1 bg-red-600/90 backdrop-blur text-white text-[10px] font-bold uppercase rounded shadow-lg border border-red-400/50">
-                                        <ShieldAlert size={10} /> Prohibited ({prohibitedCount}x)
-                                     </span>
-                                </div>
-                            )}
-
-                            {(isScanning || isNaming) && <div className="absolute inset-0 z-10 overflow-hidden"><div className="absolute left-0 w-full h-[2px] bg-emerald-400 shadow-[0_0_15px_rgba(52,211,153,1)] animate-scan"></div></div>}
-                            
-                            <div className="absolute bottom-0 left-0 right-0 p-1 bg-black/60 backdrop-blur">
-                                <p className="text-[10px] font-mono text-white truncate text-center">{upload.displayName || upload.file.name}</p>
-                            </div>
-                            
-                            {/* Error Tooltip */}
-                            {errorMessages.length > 0 && (
-                                <div className="hidden group-hover:block absolute bottom-8 left-2 right-2 z-50 animate-in fade-in slide-in-from-bottom-2">
-                                    <div className="bg-slate-900 border border-red-500/50 rounded p-2 shadow-2xl">
-                                        <div className="text-xs font-bold text-red-400 mb-1 pb-1 border-b border-white/10">Errors: ({errorMessages.length})</div>
-                                        <div className="max-h-32 overflow-y-auto space-y-1">
-                                            {errorMessages.map((msg, idx) => (
-                                                <div key={idx} className="text-[10px] text-slate-300 leading-tight">• {msg}</div>
-                                            ))}
+                                    
+                                    {/* People Count at Bottom */}
+                                    {!isScanning && (
+                                        <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-2 z-10 flex justify-center pointer-events-none">
+                                            <div className="flex items-center gap-1 text-[9px] font-mono font-bold text-white/90">
+                                                <Users size={10} className="opacity-70"/>
+                                                {u.peopleCount !== undefined ? (u.peopleCount === 0 ? "No people" : `${u.peopleCount} People`) : "..."}
+                                            </div>
                                         </div>
+                                    )}
+
+                                    {/* --- OVERLAY STATS (On Image) --- */}
+                                    <div className="absolute top-2 left-2 flex flex-col gap-1 z-30 pointer-events-none">
+                                        {alertLevel !== 'NONE' && (
+                                            <div className="px-1.5 py-0.5 bg-red-600/90 text-white rounded font-bold text-[10px] animate-pulse border border-white/20">
+                                                {alertLevel === 'CRITICAL_FAILURE' ? '!!!!!' : '!!'}
+                                            </div>
+                                        )}
+                                        {activeCount > 0 && (
+                                            <div className="flex items-center gap-1 px-1.5 py-0.5 bg-black/70 backdrop-blur rounded border border-blue-500/30 text-blue-400">
+                                                <Activity size={10} className="animate-pulse" />
+                                                <span className="text-[9px] font-bold">{activeCount}</span>
+                                            </div>
+                                        )}
+                                    </div>
+                                    
+                                    {/* --- LARGE CENTER SELECT BUTTON --- */}
+                                    {!isActive && (
+                                        <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity z-20">
+                                            <button 
+                                                onClick={() => setSelectedSourceId(u.id)} 
+                                                className="bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2 rounded-lg font-bold shadow-2xl shadow-black transform transition-transform hover:scale-105 flex items-center gap-2 border border-white/10"
+                                            >
+                                                <MousePointer2 size={16} /> SELECT
+                                            </button>
+                                        </div>
+                                    )}
+
+                                    {/* --- OVERLAY ACTIONS (On Image Bottom Right) --- */}
+                                    <div className="absolute bottom-2 right-2 flex items-center gap-2 z-30 opacity-0 group-hover:opacity-100 transition-opacity">
+                                        {isActive && (
+                                            <div className="px-2 py-1 bg-indigo-600 rounded text-[10px] font-bold text-white shadow shadow-black">SELECTED</div>
+                                        )}
+                                        <button 
+                                            onClick={(e) => { e.stopPropagation(); boostSource(u.id); }}
+                                            className="p-2 bg-black/60 hover:bg-indigo-500 text-white rounded-lg transition-colors border border-white/10 backdrop-blur"
+                                            title="Boost Priority (+10)"
+                                        >
+                                            <ArrowUp size={16} />
+                                        </button>
+                                        <button 
+                                            onClick={(e) => { e.stopPropagation(); retrySource(u.id); }}
+                                            className={`p-2 bg-black/60 rounded-lg transition-colors border border-white/10 backdrop-blur ${displayFailedCount > 0 ? 'text-amber-500 hover:bg-emerald-500 hover:text-white animate-pulse' : 'text-slate-300 hover:bg-emerald-500 hover:text-white'}`}
+                                            title="Retry Failed Jobs"
+                                        >
+                                            <RefreshCw size={16} />
+                                        </button>
+                                        <button 
+                                            onClick={(e) => { e.preventDefault(); e.stopPropagation(); deleteSource(u.id); }}
+                                            className="p-2 bg-black/60 hover:bg-red-500 text-slate-300 hover:text-white rounded-lg transition-colors border border-white/10 backdrop-blur"
+                                            title="Delete Source & Jobs"
+                                        >
+                                            <Trash2 size={16} />
+                                        </button>
                                     </div>
                                 </div>
-                            )}
+                                
+                                {totalCount > 0 && (
+                                    <div className="flex w-full h-1 bg-blue-900/20">
+                                        <div className="h-full bg-emerald-500 transition-all duration-500" style={{ width: `${(finishedCount / totalCount) * 100}%` }} title={`Generated: ${finishedCount}`}></div>
+                                        <div className="h-full bg-orange-500 transition-all duration-500" style={{ width: `${(failedCount / totalCount) * 100}%` }} title={`Failed: ${failedCount}`}></div>
+                                        <div className="h-full bg-red-500 transition-all duration-500" style={{ width: `${(prohibitedCount / totalCount) * 100}%` }} title={`Prohibited: ${prohibitedCount}`}></div>
+                                        <div className="h-full bg-blue-500 transition-all duration-500" style={{ width: `${(activeCount / totalCount) * 100}%` }} title={`Waiting: ${activeCount}`}></div>
+                                    </div>
+                                )}
+
+                                <div className="px-3 py-2 bg-[#13111c]">
+                                    <div className="flex items-center justify-between">
+                                        <div className="flex items-center min-w-0">
+                                            {/* Failure Count BEFORE Name */}
+                                            {displayFailedCount > 0 && <span className="text-red-400 font-mono text-[10px] font-bold mr-1">[{displayFailedCount}]</span>}
+                                            <span className={`text-xs font-bold truncate pr-2 ${isActive ? 'text-indigo-300' : 'text-slate-300'}`} title={u.displayName || "Processing..."}>{u.displayName || "Processing..."}</span>
+                                            {/* Success Count AFTER Name */}
+                                            {finishedCount > 0 && <span className="text-emerald-400 font-mono text-[10px] font-bold">[{finishedCount}]</span>}
+                                        </div>
+                                        {u.options.gender !== 'As-is' && <span className="text-[9px] bg-purple-500/20 text-purple-300 px-1.5 rounded uppercase font-bold shrink-0">{u.options.gender.substring(0,1)}</span>}
+                                    </div>
+                                </div>
+                            </div>
+                        );
+                    })}
+                    
+                    {displayedUploads.length === 0 && (
+                        <div className="flex flex-col items-center justify-center h-48 text-slate-600 border-2 border-dashed border-white/5 rounded-lg m-4">
+                            <Upload size={24} className="mb-2 opacity-50" />
+                            <span className="text-xs font-bold">No Sources</span>
+                            {filterNoPeople && <span className="text-[10px] text-slate-500 mt-1">(Filter Active)</span>}
                         </div>
-                        <div className="p-2 border-t border-white/5 flex gap-1">
-                            <button onClick={(e) => { e.stopPropagation(); deleteUpload(upload.id); }} className={`flex-1 py-1.5 rounded text-xs flex items-center justify-center font-bold transition-colors ${deleteBtnClass}`}><Trash2 size={12} className="inline mr-1" /> Delete</button>
-                            {hasPendingJobs && (
-                                <button onClick={(e) => { e.stopPropagation(); handlePrioritize(upload.id); }} className="px-2 py-1.5 bg-purple-600/80 hover:bg-purple-500 text-white rounded text-xs flex items-center justify-center font-bold transition-colors" title="Prioritize all pending jobs for this image"><ChevronsUp size={14} /></button>
-                            )}
-                            {hasErrorJobs && (
-                                <button onClick={(e) => { e.stopPropagation(); retrySourceJobs(upload.id); }} className="flex-1 py-1.5 bg-orange-500/20 hover:bg-orange-500/30 text-orange-400 hover:text-orange-300 rounded text-xs flex items-center justify-center border border-orange-500/20 font-bold"><RefreshCw size={12} className="inline mr-1" /> Retry</button>
-                            )}
-                            {hasDeadJobs && (
-                                <button onClick={(e) => { e.stopPropagation(); clearDeadSourceJobs(upload.id); }} className="flex-1 py-1.5 bg-red-500/20 hover:bg-red-500/30 text-red-400 hover:text-red-300 rounded text-xs flex items-center justify-center border border-red-500/20 font-bold"><XCircle size={12} className="inline mr-1" /> Clear Dead</button>
-                            )}
-                        </div>
+                    )}
+                </>
+            ) : (
+                // --- QUEUES VIEW ---
+                <div className="p-3 space-y-2">
+                    <div className="px-1 pb-2 flex justify-between items-center">
+                        <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Active Queues</span>
                     </div>
-                )})}
-                {activeQueueView !== 'UPLOADS' && getQueueItems(activeQueueView).map(item => (
-                     <div key={item.id} className="bg-slate-800 rounded-lg overflow-hidden border border-white/5 relative group">
-                        <div className={`h-1 w-full ${item.status === ProcessingStatus.PROCESSING ? 'bg-purple-500 animate-pulse' : item.status === ProcessingStatus.ERROR ? 'bg-red-500' : 'bg-slate-600'}`}></div>
-                        <div className="relative"><img src={item.thumbnailUrl} className="w-full h-auto opacity-80" />{item.detectBox && <div className="absolute border-2 border-purple-500/50" style={{top: `${item.detectBox[0]/10}%`, left: `${item.detectBox[1]/10}%`, height: `${(item.detectBox[2]-item.detectBox[0])/10}%`, width: `${(item.detectBox[3]-item.detectBox[1])/10}%`}}></div>}</div>
-                        <div className="p-3"><p className="text-xs font-bold text-slate-200 uppercase">{item.taskType}</p><p className="text-[10px] text-slate-400 truncate">{uploads.find(u => u.id === item.sourceId)?.displayName || item.file.name}</p></div>
-                        <button onClick={() => deleteJob(item.id)} className="absolute top-2 right-2 p-1 bg-black/50 hover:bg-red-500 text-white rounded opacity-0 group-hover:opacity-100 transition-opacity z-20"><Trash2 size={14} /></button>
-                        {(item.status === ProcessingStatus.ERROR || item.status === ProcessingStatus.ENDED) && (
-                            <button onClick={() => retryJob(item)} className="absolute top-2 left-2 p-1 bg-black/50 hover:bg-purple-500 text-white rounded opacity-0 group-hover:opacity-100 transition-opacity z-20"><RefreshCw size={14} /></button>
-                        )}
-                     </div>
-                ))}
-            </div>
 
-            {/* Drag Handle */}
-            <div 
-                className="absolute right-0 top-0 bottom-0 w-1 cursor-ew-resize hover:bg-purple-500 transition-colors z-50 opacity-0 hover:opacity-100 group-hover/sidebar:opacity-50"
-                onMouseDown={startResizing}
-                title="Drag to resize"
-            ></div>
-        </div>
+                    {allQueues.map(q => {
+                         const isSelected = activeQueueTab === q.id;
+                         // Calculate failure stats for this group
+                         const groupJobs = queue.filter(j => 
+                             !ANALYZING_TYPES.includes(j.taskType) && 
+                             (TASK_DEFINITIONS[j.taskType]?.label === q.id || j.taskType === q.id || (q.id === 'Failed' && j.status === ProcessingStatus.ERROR) || (q.id === 'Dead' && j.status === ProcessingStatus.ENDED) || (q.id === 'Pending' && j.status === ProcessingStatus.PENDING))
+                         );
+                         const failedCount = groupJobs.filter(j => j.status === ProcessingStatus.ERROR || j.status === ProcessingStatus.ENDED).length;
+                         const successCount = groupJobs.filter(j => j.status === ProcessingStatus.SUCCESS).length;
+                         
+                         const alertLevel = getAlertLevel(groupJobs);
 
-        {/* GALLERY AREA */}
-        <div ref={galleryRef} className="flex-1 bg-[#0f0f16] overflow-y-auto p-4 relative scroll-smooth" style={{ backgroundImage: `url(${EMPTY_GALLERY_BACKGROUND})`, backgroundAttachment: 'local', backgroundSize: 'cover' }}>
-            <div className={`grid gap-4 pb-20 transition-all duration-300 ${thumbnailSize === 'small' ? 'grid-cols-2 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8' : thumbnailSize === 'large' ? 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4' : 'grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5'}`}>
-                {galleryItems.length === 0 && (
-                    <div className="col-span-full h-[60vh] flex flex-col items-center justify-center text-slate-500 space-y-4">
-                        <div className="w-16 h-16 rounded-full bg-white/5 flex items-center justify-center"><ImageIcon size={32} className="opacity-50" /></div>
-                        <p className="font-mono text-sm">No items in this view.</p>
-                        {activeQueueView === 'UPLOADS' && <p className="text-xs opacity-50 max-w-xs text-center">Upload images to begin automatically generating line art tasks.</p>}
-                    </div>
-                )}
-                {galleryItems.map(item => (
-                    <GalleryItemCard 
-                        key={item.id} 
-                        item={item} 
-                        sourceDisplayName={uploads.find(u => u.id === item.sourceId)?.displayName}
-                        isHighlighted={selectedSourceId === item.sourceId}
-                        isSelectedSource={selectedSourceId === item.sourceId}
-                        onSetViewerItemId={setViewerItemId}
-                        onUpscale={handleUpscale}
-                        isUpscaling={upscalingIds.has(item.id)}
-                        onRepeat={repeatJob}
-                        onDelete={deleteJob}
-                    />
-                ))}
-            </div>
+                         return (
+                             <div 
+                                key={q.id} 
+                                onClick={() => setActiveQueueTab(q.id)}
+                                className={`group flex items-center justify-between p-2 rounded-lg border transition-all cursor-pointer ${isSelected ? `bg-slate-800 ${q.border}` : 'bg-slate-800/30 border-white/5 hover:bg-slate-800'}`}
+                             >
+                                 <div className="flex items-center gap-2 overflow-hidden flex-1">
+                                     <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${q.count > 0 ? 'bg-indigo-400 animate-pulse' : 'bg-slate-600'}`}></div>
+                                     <div className="flex items-center min-w-0 flex-1">
+                                        {/* Failure Alerts */}
+                                        {alertLevel !== 'NONE' && (
+                                            <span className="mr-1 text-[10px] font-black text-red-500 animate-pulse">
+                                                {alertLevel === 'CRITICAL_FAILURE' ? '!!!!!' : '!!'}
+                                            </span>
+                                        )}
+                                        
+                                        {/* Failure Count (Before Name) */}
+                                        {failedCount > 0 && (
+                                            <span className="mr-1 text-red-400 font-mono text-[10px] font-bold shrink-0">
+                                                [{failedCount}]
+                                            </span>
+                                        )}
 
-            {/* Gallery Floating Controls */}
-            {galleryItems.length > 5 && (
-                <div className="fixed bottom-8 right-8 flex flex-col gap-2 z-40 animate-in fade-in slide-in-from-bottom-4">
-                    <button onClick={scrollToGalleryTop} className="p-3 bg-slate-800/80 hover:bg-purple-600 rounded-full text-white shadow-xl backdrop-blur border border-white/10 transition-all hover:scale-110" title="Scroll to Top"><ArrowUpCircle size={24} /></button>
-                    <button onClick={scrollToGalleryBottom} className="p-3 bg-slate-800/80 hover:bg-purple-600 rounded-full text-white shadow-xl backdrop-blur border border-white/10 transition-all hover:scale-110" title="Scroll to Bottom"><ArrowDownCircle size={24} /></button>
+                                        <span className={`text-xs font-bold truncate ${isSelected ? q.color : 'text-slate-300 group-hover:text-white'}`}>{q.label}</span>
+
+                                        {/* Success Count (After Name) */}
+                                        {successCount > 0 && (
+                                            <span className="ml-1 text-emerald-400 font-mono text-[10px] font-bold shrink-0">
+                                                [{successCount}]
+                                            </span>
+                                        )}
+                                     </div>
+                                 </div>
+                                 
+                                 <div className="flex items-center gap-2 shrink-0">
+                                     <span className="text-[10px] font-mono text-slate-500 bg-black/30 px-1.5 rounded">{q.count}</span>
+                                     <button 
+                                        onClick={(e) => { e.stopPropagation(); boostQueue(q.id); }}
+                                        className="p-1.5 bg-black/20 hover:bg-indigo-500 text-slate-500 hover:text-white rounded transition-colors"
+                                        title="Boost Queue +5"
+                                     >
+                                         <ChevronsUp size={12} />
+                                     </button>
+                                 </div>
+                             </div>
+                         );
+                    })}
+                    
+                    {allQueues.length === 0 && (
+                        <div className="text-center text-[10px] text-slate-600 py-4 italic">No active queues</div>
+                    )}
+
                 </div>
             )}
         </div>
 
-        <Console isOpen={isConsoleOpen} onClose={() => setIsConsoleOpen(false)} />
-        <ManualDialog isOpen={isManualOpen} onClose={() => setIsManualOpen(false)} />
-        <OptionsDialog isOpen={isOptionsOpen} onClose={() => setIsOptionsOpen(false)} options={options} setOptions={setOptions} />
-        {viewerItemId && <ImageViewer item={queue.find(i => i.id === viewerItemId)!} onClose={() => setViewerItemId(null)} onRepeat={() => repeatJob(queue.find(i => i.id === viewerItemId)!)} onDelete={() => { deleteJob(viewerItemId); setViewerItemId(null); }} {...viewerNav} />}
+        {/* Resizer Handle */}
+        <div 
+            className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-purple-500 transition-colors z-50"
+            onMouseDown={startResizing}
+        ></div>
+      </aside>
+
+      {/* --- MAIN CONTENT --- */}
+      <main className="flex-1 flex flex-col min-w-0 bg-[#0f0f16] relative">
+          
+          {/* Header Bar */}
+          <header className="h-16 border-b border-white/5 bg-[#13111c] flex items-center justify-between px-6 shrink-0 z-30">
+               
+               {/* Left: Queue Stats */}
+               <div className="flex items-center space-x-6">
+                   <div className="flex items-center space-x-3">
+                       <button onClick={() => setQueueActive(!queueActive)} className={`p-2.5 rounded-full transition-all shadow-lg ${queueActive ? 'bg-emerald-500 text-black hover:bg-emerald-400' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}>
+                           {queueActive ? <Pause fill="currentColor" size={18} /> : <Play fill="currentColor" size={18} />}
+                       </button>
+                       <div className="flex flex-col">
+                            <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Queue Status</span>
+                            <span className={`text-sm font-bold ${queueActive ? 'text-emerald-400' : 'text-slate-500'}`}>{queueActive ? 'Running' : 'Paused'}</span>
+                       </div>
+                   </div>
+
+                   <div className="h-8 w-px bg-white/10"></div>
+
+                   <div className="flex flex-col w-48">
+                        <div className="flex justify-between text-[10px] font-bold text-slate-400 mb-1 uppercase">
+                            <span>Progress</span>
+                            <span>{Math.round(progress)}%</span>
+                        </div>
+                        <div className="h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                            <div className="h-full bg-gradient-to-r from-indigo-500 to-purple-500 transition-all duration-300" style={{ width: `${progress}%` }}></div>
+                        </div>
+                   </div>
+               </div>
+
+               {/* Right: Global Actions */}
+               <div className="flex items-center space-x-3">
+                   <button onClick={() => setIsOptionsOpen(true)} className="flex items-center gap-2 px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-bold border border-white/5 transition-colors"><Settings size={16} /> <span>Options</span></button>
+                   <button onClick={selectKey} className={`p-2 rounded-lg border border-white/5 transition-colors ${isKeyLoading ? 'bg-amber-500/20 text-amber-400 animate-pulse' : 'bg-slate-800 hover:bg-slate-700 text-slate-300'}`} title="API Key"><Key size={18} /></button>
+                   <button onClick={() => setIsManualOpen(true)} className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg border border-white/5 transition-colors" title="Manual"><Book size={18} /></button>
+                   <button onClick={() => setIsConsoleOpen(true)} className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg border border-white/5 transition-colors" title="Console"><Info size={18} /></button>
+               </div>
+          </header>
+
+          {/* Icon Bar (View Navigation) */}
+          <div className="h-14 border-b border-white/5 bg-[#0f0f16] flex items-center px-4 shrink-0 overflow-x-auto scrollbar-hide space-x-2">
+               <button onClick={() => setActiveQueueTab('UPLOADS')} className={`p-2 rounded-lg transition-colors flex items-center gap-2 ${activeQueueTab === 'UPLOADS' ? 'bg-indigo-600 text-white shadow' : 'text-slate-500 hover:text-slate-300 hover:bg-white/5'}`}>
+                   <Layers size={18} /> <span className="text-xs font-bold">All Results</span>
+               </button>
+               <div className="w-px h-6 bg-white/10 mx-2"></div>
+               
+               {/* Categories (Legacy view bar - kept for quick access, but main navigation now in sidebar too) */}
+               {categories.map(cat => (
+                   <button 
+                        key={cat} 
+                        onClick={() => setActiveQueueTab(cat)}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap border transition-all ${activeQueueTab === cat ? 'bg-slate-800 text-white border-purple-500/50' : 'text-slate-500 border-transparent hover:text-slate-300 hover:bg-white/5'}`}
+                   >
+                       {cat}
+                   </button>
+               ))}
+               
+               <div className="flex-1"></div>
+               
+               {/* Status Filters */}
+               <button onClick={() => setActiveQueueTab('Failed')} className={`p-2 rounded-lg transition-colors ${activeQueueTab === 'Failed' ? 'bg-red-500/20 text-red-400' : 'text-slate-600 hover:text-red-500'}`} title="Failed"><XCircle size={16} /></button>
+          </div>
+
+          {/* Gallery Area */}
+          <div 
+            className="flex-1 overflow-y-auto p-6 relative custom-scrollbar bg-slate-900/50 space-y-8" 
+            ref={galleryRef}
+          >
+               {/* Background for empty state */}
+               {queue.length === 0 && (
+                   <div className="absolute inset-0 flex items-center justify-center opacity-30 pointer-events-none" style={{ backgroundImage: `url("${EMPTY_GALLERY_BACKGROUND}")`, backgroundSize: 'cover', backgroundPosition: 'center' }}>
+                       <div className="text-center p-8 bg-black/60 backdrop-blur-md rounded-2xl border border-white/10 max-w-md">
+                           <div className="w-16 h-16 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-xl mx-auto mb-4 flex items-center justify-center shadow-lg shadow-indigo-500/30">
+                               <ImageIcon className="text-white w-8 h-8" />
+                           </div>
+                           <h3 className="text-xl font-bold text-white mb-2">Workspace Ready</h3>
+                           <p className="text-slate-400 text-sm">Drag and drop images to begin processing. Configure tasks in Options.</p>
+                       </div>
+                   </div>
+               )}
+
+               {/* SECTION 1: SELECTED SOURCE RESULTS - SHOW ALL JOBS FOR THIS SOURCE (EXCEPT ANALYZING) */}
+               {selectedSourceId && selectedSourceJobs.length > 0 && (
+                   <div>
+                       <div className="flex items-center gap-2 mb-4 pb-2 border-b border-white/5 sticky top-0 bg-slate-900/90 backdrop-blur z-10 py-2">
+                            <h3 className="text-lg font-bold text-indigo-400 uppercase tracking-wider flex items-center gap-2">
+                                {/* Failure count before name */}
+                                {selectedSourceJobs.filter(j => j.status === ProcessingStatus.ERROR || j.status === ProcessingStatus.ENDED).length > 0 && (
+                                    <span className="text-red-500 font-mono">[{selectedSourceJobs.filter(j => j.status === ProcessingStatus.ERROR || j.status === ProcessingStatus.ENDED).length}]</span>
+                                )}
+                                <span>Selection: {uploads.find(u => u.id === selectedSourceId)?.displayName || "Image"}</span>
+                                {/* Generated (Success) count after name */}
+                                {selectedSourceJobs.filter(j => j.status === ProcessingStatus.SUCCESS).length > 0 && (
+                                    <span className="text-emerald-500 font-mono">[{selectedSourceJobs.filter(j => j.status === ProcessingStatus.SUCCESS).length}]</span>
+                                )}
+                            </h3>
+                            <span className="text-xs text-slate-500 font-mono bg-black/30 px-2 py-0.5 rounded-full">{selectedSourceJobs.length}</span>
+                            
+                            {/* Contextual Action Buttons for Source */}
+                            <div className="flex items-center gap-2 ml-4">
+                                <button onClick={() => retrySelection(selectedSourceJobs)} className="text-[10px] uppercase font-bold text-slate-300 hover:text-emerald-400 bg-slate-800 hover:bg-slate-700 px-2 py-1 rounded border border-white/5 flex items-center gap-1 transition-colors">
+                                    <RefreshCw size={10} /> Retry Failed
+                                </button>
+                                <button onClick={() => deleteFailedInSelection(selectedSourceJobs)} className="text-[10px] uppercase font-bold text-slate-300 hover:text-amber-400 bg-slate-800 hover:bg-slate-700 px-2 py-1 rounded border border-white/5 flex items-center gap-1 transition-colors">
+                                    <AlertTriangle size={10} /> Del Failed
+                                </button>
+                                <button onClick={() => deleteAllInSelection(selectedSourceJobs)} className="text-[10px] uppercase font-bold text-slate-300 hover:text-red-400 bg-slate-800 hover:bg-slate-700 px-2 py-1 rounded border border-white/5 flex items-center gap-1 transition-colors">
+                                    <Trash2 size={10} /> Del All
+                                </button>
+                            </div>
+
+                            <div className="ml-auto">
+                                <button onClick={() => setSelectedSourceId(null)} className="text-xs text-slate-400 hover:text-white flex items-center gap-1 bg-slate-800 px-2 py-1 rounded"><XCircle size={12}/> Clear Selection</button>
+                            </div>
+                       </div>
+                       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-4 animate-in fade-in slide-in-from-top-4">
+                           {selectedSourceJobs.map(item => (
+                               <GalleryItemCard 
+                                    key={item.id} 
+                                    item={item} 
+                                    onSetViewerItemId={setViewerItemId}
+                                    onRepeat={(i) => setQueue(prev => [...prev, { ...i, id: crypto.randomUUID(), status: ProcessingStatus.PENDING, result: undefined, retryCount: 0, priority: 50, errorHistory: [] }])}
+                                    onDelete={(id) => setQueue(prev => prev.filter(p => p.id !== id))}
+                                    onDeleteSource={deleteSource}
+                                    onDetails={setDetailsJobId}
+                                    onFilterSource={setSelectedSourceId}
+                                    showPriority
+                               />
+                           ))}
+                       </div>
+                   </div>
+               )}
+
+               {/* SECTION 2: RUNNING & PENDING (Wait, we filtered pending unless explicit) -> RUNNING */}
+               {runningJobs.length > 0 && (
+                   <div>
+                       <div className="flex items-center gap-2 mb-4 pb-2 border-b border-white/5 sticky top-0 bg-slate-900/90 backdrop-blur z-10 py-2">
+                            <Activity className="text-blue-400" size={18} />
+                            <h3 className="text-lg font-bold text-blue-400 uppercase tracking-wider">Active Tasks</h3>
+                            <span className="text-xs text-slate-500 font-mono bg-black/30 px-2 py-0.5 rounded-full">{runningJobs.length}</span>
+                       </div>
+                       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-4">
+                           {runningJobs.map(item => (
+                               <GalleryItemCard 
+                                    key={item.id} 
+                                    item={item} 
+                                    onSetViewerItemId={setViewerItemId}
+                                    onRepeat={(i) => setQueue(prev => [...prev, { ...i, id: crypto.randomUUID(), status: ProcessingStatus.PENDING, result: undefined, retryCount: 0, priority: 50, errorHistory: [] }])}
+                                    onDelete={(id) => setQueue(prev => prev.filter(p => p.id !== id))}
+                                    onDeleteSource={deleteSource}
+                                    onDetails={setDetailsJobId}
+                                    onFilterSource={setSelectedSourceId}
+                                    showPriority
+                               />
+                           ))}
+                       </div>
+                   </div>
+               )}
+
+                {/* SECTION 2.5: EXPLICIT OTHER JOBS (Pending/Failed/Dead if selected) */}
+                {explicitOtherJobs.length > 0 && (
+                   <div>
+                       <div className="flex items-center gap-2 mb-4 pb-2 border-b border-white/5 sticky top-0 bg-slate-900/90 backdrop-blur z-10 py-2">
+                            <List className="text-slate-400" size={18} />
+                            <h3 className="text-lg font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2">
+                                {/* Failure count before name */}
+                                {explicitOtherJobs.filter(j => j.status === ProcessingStatus.ERROR || j.status === ProcessingStatus.ENDED).length > 0 && (
+                                    <span className="text-red-500 font-mono">[{explicitOtherJobs.filter(j => j.status === ProcessingStatus.ERROR || j.status === ProcessingStatus.ENDED).length}]</span>
+                                )}
+                                <span>{activeQueueTab} Items</span>
+                                {/* Generated (Success) count after name */}
+                                {explicitOtherJobs.filter(j => j.status === ProcessingStatus.SUCCESS).length > 0 && (
+                                    <span className="text-emerald-500 font-mono">[{explicitOtherJobs.filter(j => j.status === ProcessingStatus.SUCCESS).length}]</span>
+                                )}
+                            </h3>
+                            <span className="text-xs text-slate-500 font-mono bg-black/30 px-2 py-0.5 rounded-full">{explicitOtherJobs.length}</span>
+
+                             {/* Contextual Action Buttons for Queue */}
+                             <div className="flex items-center gap-2 ml-4">
+                                <button onClick={() => retrySelection(explicitOtherJobs)} className="text-[10px] uppercase font-bold text-slate-300 hover:text-emerald-400 bg-slate-800 hover:bg-slate-700 px-2 py-1 rounded border border-white/5 flex items-center gap-1 transition-colors">
+                                    <RefreshCw size={10} /> Retry Failed
+                                </button>
+                                <button onClick={() => deleteFailedInSelection(explicitOtherJobs)} className="text-[10px] uppercase font-bold text-slate-300 hover:text-amber-400 bg-slate-800 hover:bg-slate-700 px-2 py-1 rounded border border-white/5 flex items-center gap-1 transition-colors">
+                                    <AlertTriangle size={10} /> Del Failed
+                                </button>
+                                <button onClick={() => deleteAllInSelection(explicitOtherJobs)} className="text-[10px] uppercase font-bold text-slate-300 hover:text-red-400 bg-slate-800 hover:bg-slate-700 px-2 py-1 rounded border border-white/5 flex items-center gap-1 transition-colors">
+                                    <Trash2 size={10} /> Del All
+                                </button>
+                            </div>
+                       </div>
+                       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-4">
+                           {explicitOtherJobs.map(item => (
+                               <GalleryItemCard 
+                                    key={item.id} 
+                                    item={item} 
+                                    onSetViewerItemId={setViewerItemId}
+                                    onRepeat={(i) => setQueue(prev => [...prev, { ...i, id: crypto.randomUUID(), status: ProcessingStatus.PENDING, result: undefined, retryCount: 0, priority: 50, errorHistory: [] }])}
+                                    onDelete={(id) => setQueue(prev => prev.filter(p => p.id !== id))}
+                                    onDeleteSource={deleteSource}
+                                    onDetails={setDetailsJobId}
+                                    onFilterSource={setSelectedSourceId}
+                                    showPriority
+                               />
+                           ))}
+                       </div>
+                   </div>
+               )}
+
+
+               {/* SECTION 3: ALL FINISHED */}
+               {finishedJobs.length > 0 && (
+                   <div>
+                       <div className="flex items-center gap-2 mb-4 pb-2 border-b border-white/5 sticky top-0 bg-slate-900/90 backdrop-blur z-10 py-2">
+                            <ImageIcon className="text-emerald-400" size={18} />
+                            <h3 className="text-lg font-bold text-emerald-400 uppercase tracking-wider">Finished</h3>
+                            <span className="text-xs text-slate-500 font-mono bg-black/30 px-2 py-0.5 rounded-full">{finishedJobs.length}</span>
+                       </div>
+                       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-4">
+                           {finishedJobs.map(item => (
+                               <GalleryItemCard 
+                                    key={item.id} 
+                                    item={item} 
+                                    onSetViewerItemId={setViewerItemId}
+                                    onRepeat={(i) => setQueue(prev => [...prev, { ...i, id: crypto.randomUUID(), status: ProcessingStatus.PENDING, result: undefined, retryCount: 0, priority: 50, errorHistory: [] }])}
+                                    onDelete={(id) => setQueue(prev => prev.filter(p => p.id !== id))}
+                                    onDeleteSource={deleteSource}
+                                    onDetails={setDetailsJobId}
+                                    onFilterSource={setSelectedSourceId}
+                                    showPriority
+                               />
+                           ))}
+                       </div>
+                   </div>
+               )}
+
+          </div>
+          
+          {/* Footer Info */}
+          <div className="h-8 bg-[#0f0f16] border-t border-white/5 flex items-center justify-between px-4 text-[10px] text-slate-500 font-mono shrink-0 z-30">
+               <div>Active Threads: {activeJobs} / {maxConcurrent}</div>
+               <div>Queue ID: {uploads.length > 0 ? uploads[0].id.substring(0,8) : 'N/A'}...</div>
+          </div>
+
+      </main>
+
+      {/* Dialogs */}
+      <Console isOpen={isConsoleOpen} onClose={() => setIsConsoleOpen(false)} />
+      <ManualDialog isOpen={isManualOpen} onClose={() => setIsManualOpen(false)} />
+      <OptionsDialog isOpen={isOptionsOpen} onClose={() => setIsOptionsOpen(false)} options={options} setOptions={setOptions} />
+      
+      {viewerItemId && (
+          <ImageViewer 
+             item={queue.find(i => i.id === viewerItemId)!} 
+             onClose={() => setViewerItemId(null)}
+             hasNext={hasNext}
+             hasPrev={hasPrev}
+             onNext={() => {
+                 if (hasNext) setViewerItemId(displayedViewerList[currentIndex + 1].id);
+             }}
+             onPrev={() => {
+                 if (hasPrev) setViewerItemId(displayedViewerList[currentIndex - 1].id);
+             }}
+             onFirst={() => setViewerItemId(displayedViewerList[0].id)}
+             onLast={() => setViewerItemId(displayedViewerList[displayedViewerList.length - 1].id)}
+             onDelete={() => {
+                 const nextId = displayedViewerList[currentIndex + 1]?.id || displayedViewerList[currentIndex - 1]?.id;
+                 setQueue(prev => prev.filter(p => p.id !== viewerItemId));
+                 setViewerItemId(nextId || null);
+             }}
+             onRepeat={() => {
+                 const item = queue.find(i => i.id === viewerItemId);
+                 if (item) setQueue(prev => [...prev, { ...item, id: crypto.randomUUID(), status: ProcessingStatus.PENDING, result: undefined, retryCount: 0, priority: 50, errorHistory: [] }]);
+             }}
+             onDetails={() => {
+                 setDetailsJobId(viewerItemId);
+             }}
+          />
+      )}
+
+      {detailsJobId && (
+          <JobDetailsDialog 
+            isOpen={!!detailsJobId}
+            onClose={() => setDetailsJobId(null)}
+            job={queue.find(j => j.id === detailsJobId)}
+            source={uploads.find(u => u.id === queue.find(j => j.id === detailsJobId)?.sourceId)}
+          />
+      )}
+
     </div>
   );
 }

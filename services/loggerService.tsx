@@ -28,12 +28,20 @@ export const LoggerProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       title,
       details,
     };
-    setLogs((prev) => [newLog, ...prev]);
     
-    // Also log to browser console for dev convenience
+    // Log to browser console
     if (level === LogLevel.ERROR) console.error(title, details);
     else if (level === LogLevel.WARN) console.warn(title, details);
     else console.log(`[${level}] ${title}`, details);
+
+    // Update state, keeping only the last 100 logs
+    setLogs((prev) => {
+      const updated = [newLog, ...prev];
+      if (updated.length > 100) {
+        return updated.slice(0, 100);
+      }
+      return updated;
+    });
 
   }, []);
 

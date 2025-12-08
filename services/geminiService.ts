@@ -1,8 +1,3 @@
-
-
-
-
-
 import { GoogleGenAI } from "@google/genai";
 import { LogLevel, GeneratedImage, TaskType, AppOptions } from "../types";
 import { TASK_DEFINITIONS } from "./taskDefinitions";
@@ -199,11 +194,13 @@ const extractImageFromResponse = (response: any, logTitle: string, addLog: any):
     throw new Error(`Gemini did not return a valid image for ${logTitle}.`);
 };
 
+// Complete safety settings including Civic Integrity to minimize blocks
 const SAFETY_SETTINGS_BLOCK_NONE = [
     { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
     { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
     { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' },
-    { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' }
+    { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
+    { category: 'HARM_CATEGORY_CIVIC_INTEGRITY', threshold: 'BLOCK_NONE' }
 ];
 
 const sanitizeDescription = (text: string): string => {
@@ -384,7 +381,8 @@ export const generateLineArtTask = async (
           detailLevel: options.detailLevel,
           personDescription: sanitizeDescription(personDescription || ''),
           customStyle: options.customStyle,
-          modesty: options.modesty
+          modesty: options.modesty,
+          bodyHair: options.bodyHair
       });
   } else {
       throw new Error(`Unknown Task Type: ${taskType}`);
